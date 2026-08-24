@@ -1,6 +1,6 @@
 const jwt = require('jsonwebtoken');
 
-const authenticateJWT = (req, res, next) => {
+const authenticateJWT = async (req, res, next) => {
   // Get auth header - The Authorization header is commonly used to send authentication tokens
   const authHeader = req.headers.authorization;
 
@@ -19,8 +19,16 @@ const authenticateJWT = (req, res, next) => {
     // Verify token
     const decoded = jwt.verify(token, process.env.JWT_SECRET);
 
-    // Attach user to request
+    // Attach user to request and check if the password is changed
     req.user = decoded;
+    const user = await global.prisma.user.findUnique({
+      where: { username: decoded.username},
+      include: { role: true }
+    });
+
+    if (decoded.tokenver < user.tokenver) {
+      throw 
+    }
 
     next();
   } catch (error) {
