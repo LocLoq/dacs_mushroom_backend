@@ -5,36 +5,12 @@ const router = express.Router();
 
 const prisma = global.prisma;
 
-// Middleware xác thực JWT
-const authenticateToken = (req, res, next) => {
-    const authHeader = req.headers['authorization'];
-    const token = authHeader && authHeader.split(' ')[1]; // "Bearer <token>"
-    
-    if (!token) return res.status(401).json({ message: 'Không tìm thấy token' });
-    
-    jwt.verify(token, process.env.JWT_SECRET, (err, user) => {
-        if (err) return res.status(403).json({ message: 'Token không hợp lệ hoặc đã hết hạn' });
-        req.user = user;
-        next();
-    });
-};
+const { authenticateToken, authorizeRoles } = require('../middlewares/auth');
 
-// Middleware kiểm tra quyền
-const authorizeRoles = (...allowedRoles) => {
-    return (req, res, next) => {
-        if (!req.user || !allowedRoles.includes(req.user.role)) {
-            return res.status(403).json({ message: 'Bạn không có quyền thực hiện hành động này' });
-        }
-        next();
-    };
-};
-
-const allRoles = ['admin', 'manager', 'staff'];
-const managerAndAdmin = ['admin', 'manager'];
 
 // 1. API Tìm kiếm và Lấy danh sách (Cho phép admin, manager, staff)
 // Hỗ trợ phân trang (tối đa 50 item/page) và query search
-router.get('/', authenticateToken, authorizeRoles(...allRoles), async (req, res) => {
+router.get('/', authenticateToken, authorizeRoles(...global.allowedRoles), async (req, res) => {
     try {
         const page = parseInt(req.query.page) || 1;
         const limit = Math.min(parseInt(req.query.limit) || 10, 50); // Bắt buộc tối đa 50 item
@@ -76,7 +52,7 @@ router.get('/', authenticateToken, authorizeRoles(...allRoles), async (req, res)
 });
 
 // 2. API Thêm giống nấm mới (Chỉ cho phép admin, manager)
-router.post('/', authenticateToken, authorizeRoles(...managerAndAdmin), async (req, res) => {
+router.post('/', authenticateToken, authorizeRoles(...global.privilegedRoles), async (req, res) => {
     try {
         const newMushroom = await prisma.mushroom.create({
             data: req.body
@@ -89,7 +65,7 @@ router.post('/', authenticateToken, authorizeRoles(...managerAndAdmin), async (r
 });
 
 // 3. API Sửa thông tin giống nấm (Chỉ cho phép admin, manager)
-router.put('/:id', authenticateToken, authorizeRoles(...managerAndAdmin), async (req, res) => {
+router.put('/:id', authenticateToken, authorizeRoles(...global.privilegedRoles), async (req, res) => {
     try {
         const id = parseInt(req.params.id);
         const updatedMushroom = await prisma.mushroom.update({
@@ -104,7 +80,7 @@ router.put('/:id', authenticateToken, authorizeRoles(...managerAndAdmin), async 
 });
 
 // 4. API Xóa giống nấm (Chỉ cho phép admin, manager)
-router.delete('/:id', authenticateToken, authorizeRoles(...managerAndAdmin), async (req, res) => {
+router.delete('/:id', authenticateToken, authorizeRoles(...global.privilegedRoles), async (req, res) => {
     try {
         const id = parseInt(req.params.id);
         await prisma.mushroom.delete({

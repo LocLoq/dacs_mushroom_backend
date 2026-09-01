@@ -19,6 +19,8 @@ model User {
   username      String @unique @db.VarChar(50)
   password_hash String @db.VarChar(255)
   full_name     String @db.VarChar(100)
+  phone_number  String
+  email         String
   role_id       Int
   tokenver      Int
 
@@ -46,7 +48,17 @@ enum CultivationDifficulty {
   HARD         // Khó trồng
   UNCULTIVABLE // Không thể trồng nhân tạo (vd: nấm cục Truffle)
 }
+enum FacilityType {
+  HOUSEHOLD     // Hộ kinh doanh cá thể
+  COOPERATIVE   // Hợp tác xã
+  ENTERPRISE    // Doanh nghiệp / Công ty
+}
 
+enum FacilityStatus {
+  ACTIVE        // Đang hoạt động
+  SUSPENDED     // Tạm ngưng
+  CLOSED        // Đã đóng cửa
+}
 // ------------------------------------------------------
 // MODELS (Bảng dữ liệu)
 // ------------------------------------------------------
@@ -87,6 +99,31 @@ model Mushroom {
   // Metadata
   createdAt             DateTime               @default(now()) @map("created_at")
   updatedAt             DateTime               @updatedAt @map("updated_at")
+  facilities            ProductionFacility[]   @relation("FacilityToMushroom")
 
   @@map("mushroom_species") // Tên bảng thực tế trong Database
+}
+
+model ProductionFacility {
+  id                  Int             @id @default(autoincrement())
+  name                String
+  taxCode             String?         @unique @map("tax_code")
+  address             String
+  province            String?         // Hỗ trợ truy vấn phân vùng địa lý nhanh
+  contactPhone        String?         @map("contact_phone")
+  contactEmail        String?         @map("contact_email")
+  
+  facilityType        FacilityType    @map("facility_type")
+  capacityTonsPerYear Float?          @map("capacity_tons_per_year")
+  totalAreaSqm        Float?          @map("total_area_sqm")
+  certifications      String?         // Ví dụ: "VietGAP, ISO 22000"
+  status              FacilityStatus  @default(ACTIVE)
+
+  // Quan hệ Nhiều - Nhiều với bảng Giống nấm
+  mushrooms           Mushroom[]      @relation("FacilityToMushroom")
+
+  createdAt           DateTime        @default(now()) @map("created_at")
+  updatedAt           DateTime        @updatedAt @map("updated_at")
+
+  @@map("production_facilities")
 }
