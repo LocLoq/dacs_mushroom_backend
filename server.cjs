@@ -40,6 +40,7 @@ app.use(express.urlencoded({ extended: true }));
 app.use('/api', testRoutes);
 app.use('/api', loginRoutes);
 app.use('/api/mushroom', require('./routes/mushroom'));
+app.use('/api/mushroom-species', require('./routes/mushroomSpeciesManagement'));
 
 // basic socket event
 io.on('connection', (socket) => {

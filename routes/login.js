@@ -4,12 +4,13 @@ const bcrypt = require('bcrypt');
 
 
 const router = express.Router();
+const prisma = global.prisma;
 
 router.post('/login', async (req, res) => {
   try {
     const { username, password } = req.body;
     
-    const user = await global.prisma.user.findUnique({
+    const user = await prisma.user.findUnique({
       where: { username },
       include: { role: true }
     });

@@ -1,0 +1,92 @@
+datasource db {
+  provider = "mysql"
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+model Role {
+  id    Int    @id @default(autoincrement())
+  name  String @unique @db.VarChar(50)
+  users User[]
+
+  @@map("roles")
+}
+
+model User {
+  id            Int    @id @default(autoincrement())
+  username      String @unique @db.VarChar(50)
+  password_hash String @db.VarChar(255)
+  full_name     String @db.VarChar(100)
+  role_id       Int
+  tokenver      Int
+
+  role Role @relation(fields: [role_id], references: [id], onDelete: Cascade)
+
+  @@map("users")
+}
+enum EcologyType {
+  SAPROBIC     // Hoại sinh (phân hủy mùn hữu cơ)
+  MYCORRHIZAL  // Cộng sinh (với rễ cây)
+  PARASITIC    // Ký sinh (trên sinh vật sống khác)
+}
+
+enum EdibilityStatus {
+  CHOICE       // Ngon, tuyệt hảo
+  EDIBLE       // Ăn được (có thể cần chế biến)
+  INEDIBLE     // Không ăn được (do mùi vị, kết cấu)
+  POISONOUS    // Có độc
+  DEADLY       // Độc chết người
+}
+
+enum CultivationDifficulty {
+  EASY         // Dễ trồng
+  MEDIUM       // Trung bình
+  HARD         // Khó trồng
+  UNCULTIVABLE // Không thể trồng nhân tạo (vd: nấm cục Truffle)
+}
+
+// ------------------------------------------------------
+// MODELS (Bảng dữ liệu)
+// ------------------------------------------------------
+
+model Mushroom {
+  id                    Int                    @id @default(autoincrement())
+  
+  // 1. Phân loại học (Taxonomy)
+  scientificName        String                 @unique @map("scientific_name")
+  commonName            String                 @map("common_name")
+  otherNames            String?                @map("other_names")
+  family                String
+  genus                 String
+
+  // 2. Hình thái học (Morphology)
+  capDescription        String?                @db.Text @map("cap_description")
+  gillsDescription      String?                @db.Text @map("gills_description")
+  stemDescription       String?                @db.Text @map("stem_description")
+  sporePrintColor       String?                @map("spore_print_color")
+  bruisingBehavior      String?                @map("bruising_behavior") // Phản ứng đổi màu khi xước
+
+  // 3. Sinh thái & Môi trường sống (Ecology & Habitat)
+  ecologyType           EcologyType?           @map("ecology_type")
+  habitat               String?                @db.Text
+  fruitingSeason        String?                @map("fruiting_season")
+
+  // 4. Giá trị sử dụng & Độc tính (Edibility & Toxicity)
+  edibilityStatus       EdibilityStatus        @map("edibility_status")
+  toxicitySymptoms      String?                @db.Text @map("toxicity_symptoms")
+  medicinalProperties   String?                @db.Text @map("medicinal_properties")
+
+  // 5. Nuôi trồng (Cultivation)
+  cultivationDifficulty CultivationDifficulty? @map("cultivation_difficulty")
+  
+  // 6. Đa phương tiện
+  imageUrl              String?                @map("image_url")
+
+  // Metadata
+  createdAt             DateTime               @default(now()) @map("created_at")
+  updatedAt             DateTime               @updatedAt @map("updated_at")
+
+  @@map("mushroom_species") // Tên bảng thực tế trong Database
+}
