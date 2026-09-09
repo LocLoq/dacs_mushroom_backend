@@ -59,6 +59,15 @@ enum FacilityStatus {
   SUSPENDED     // Tạm ngưng
   CLOSED        // Đã đóng cửa
 }
+
+enum BatchStatus {
+  PREPARATION // Chuẩn bị cơ chất/trại
+  INCUBATION  // Ủ tơ
+  FRUITING    // Ra quả thể
+  HARVESTING  // Đang thu hoạch
+  COMPLETED   // Đã hoàn tất & dọn trại
+  FAILED      // Bị hỏng/nhiễm bệnh toàn lô
+}
 // ------------------------------------------------------
 // MODELS (Bảng dữ liệu)
 // ------------------------------------------------------
@@ -102,6 +111,7 @@ model Mushroom {
   facilities            ProductionFacility[]   @relation("FacilityToMushroom")
 
   @@map("mushroom_species") // Tên bảng thực tế trong Database
+  cultivationBatches CultivationBatch[]
 }
 
 model ProductionFacility {
@@ -126,4 +136,38 @@ model ProductionFacility {
   updatedAt           DateTime        @updatedAt @map("updated_at")
 
   @@map("production_facilities")
+  cultivationBatches CultivationBatch[]
+}
+
+
+model CultivationBatch {
+  id                  Int             @id @default(autoincrement())
+  batchCode           String          @unique @map("batch_code") 
+  
+  // Khóa ngoại
+  facilityId          Int             @map("facility_id")
+  mushroomId          Int             @map("mushroom_id")
+  facility            ProductionFacility @relation(fields: [facilityId], references: [id])
+  mushroom            Mushroom           @relation(fields: [mushroomId], references: [id])
+  
+  // Trạng thái & Vận hành
+  status              BatchStatus     @default(PREPARATION)
+  substrateType       String?         @map("substrate_type")
+  spawnSource         String?         @map("spawn_source")
+  bagQuantity         Int?            @map("bag_quantity")
+  
+  // Tiến độ thời gian
+  startDate           DateTime        @map("start_date")
+  expectedHarvestDate DateTime?       @map("expected_harvest_date")
+  endDate             DateTime?       @map("end_date")
+  
+  // Năng suất & Đánh giá
+  actualYieldKg       Float?          @map("actual_yield_kg") 
+  defectRate          Float?          @map("defect_rate") // Tỷ lệ hao hụt (%)
+  notes               String?         @db.Text
+  
+  createdAt           DateTime        @default(now()) @map("created_at")
+  updatedAt           DateTime        @updatedAt @map("updated_at")
+
+  @@map("cultivation_batches")
 }

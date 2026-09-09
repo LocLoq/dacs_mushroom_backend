@@ -7,20 +7,24 @@ const authenticateToken = async (req, res, next) => {
     
     if (!token) return res.status(401).json({ message: 'Không tìm thấy token' });
     
-    jwt.verify(token, process.env.JWT_SECRET, async (err, user) => {
+    jwt.verify(token, process.env.JWT_SECRET, async (err, decodedUser) => {
         if (err) return res.status(403).json({ message: 'Token không hợp lệ hoặc đã hết hạn' });
 
-        // Attach user to request and check if the password is changed
-        req.user = decodedUser;
-        const user = await global.prisma.user.findUnique({
-            where: { username: decoded.username},
-            include: { role: true }
-        });
-        
-        if (decodedUser.tokenver < user.tokenver) {
-            return res.status(403).json({ message: 'Token không hợp lệ hoặc đã hết hạn' });
+        try {
+            const dbUser = await global.prisma.user.findUnique({
+                where: { username: decodedUser.username}
+            });
+            
+            if (!dbUser || decodedUser.tokenver < dbUser.tokenver) {
+                return res.status(403).json({ message: 'Token không hợp lệ hoặc đã hết hạn' });
+            }
+            
+            req.user = decodedUser;
+            next();
+        } catch (dbErr) {
+            console.error(dbErr);
+            return res.status(500).json({ message: 'Lỗi xác thực người dùng' });
         }
-        next();
     });
 };
 

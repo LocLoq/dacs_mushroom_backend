@@ -6,6 +6,9 @@ const { loadEnvFile } = require('node:process');
 const { PrismaClient } = require('@prisma/client');
 const { PrismaMariaDb } = require('@prisma/adapter-mariadb');
 const mariadb = require('mariadb');
+const swaggerUi = require('swagger-ui-express');
+const YAML = require('yamljs');
+const path = require('path');
 
 const pool = mariadb.createPool({
   host: process.env.DATABASE_HOST,
@@ -45,6 +48,11 @@ app.use('/api/mushroom', require('./routes/mushroom'));
 app.use('/api/mushroom-species', require('./routes/mushroomSpeciesManagement'));
 app.use('/api/admin', require('./routes/admin'));
 app.use('/api/production-facilities', require('./routes/productionFacilityManagement'));
+app.use('/api/cultivation-batches', require('./routes/cultivationBatchManagement'));
+
+// Swagger UI
+const swaggerDocument = YAML.load(path.join(__dirname, 'swagger.yaml'));
+app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(swaggerDocument));
 
 // basic socket event
 io.on('connection', (socket) => {

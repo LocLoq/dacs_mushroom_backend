@@ -10,7 +10,7 @@ const { authenticateToken, authorizeRoles } = require('../middlewares/auth');
 
 // 1. API Tìm kiếm và Lấy danh sách (Cho phép admin, manager, staff)
 // Hỗ trợ phân trang (tối đa 50 item/page) và query search
-router.get('/', authenticateToken, authorizeRoles(...global.allowedRoles), async (req, res) => {
+router.get('/', authenticateToken, authorizeRoles(...global.allRoles), async (req, res) => {
     try {
         const page = parseInt(req.query.page) || 1;
         const limit = Math.min(parseInt(req.query.limit) || 10, 50); // Bắt buộc tối đa 50 item
