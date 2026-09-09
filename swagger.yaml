@@ -316,6 +316,7 @@ paths:
         content:
           application/json:
             schema:
+              type: object
               $ref: '#/components/schemas/Mushroom'
       responses:
         '200':
@@ -363,6 +364,28 @@ paths:
         content:
           application/json:
             schema:
+              type: object
+              properties:
+                name:
+                  type: string
+                  description: Tên cơ sở
+                taxCode:
+                  type: string
+                  description: Mã số thuế
+                address:
+                  type: string
+                  description: Địa chỉ
+                facilityType:
+                  type: string
+                  description: Loại hình cơ sở (HOUSEHOLD, COOPERATIVE, ENTERPRISE)
+                status:
+                  type: string
+                  description: Trạng thái (ACTIVE, SUSPENDED, CLOSED)
+                mushrooms:
+                  type: array
+                  description: Danh sách các ID giống nấm đang được trồng tại cơ sở này
+                  items:
+                    type: integer
               $ref: '#/components/schemas/ProductionFacility'
       responses:
         '201':
@@ -396,6 +419,13 @@ paths:
         content:
           application/json:
             schema:
+              type: object
+              properties:
+                mushrooms:
+                  type: array
+                  description: Danh sách các ID giống nấm đang được trồng tại cơ sở này (Ghi đè lại)
+                  items:
+                    type: integer
               $ref: '#/components/schemas/ProductionFacility'
       responses:
         '200':
@@ -458,6 +488,21 @@ paths:
         content:
           application/json:
             schema:
+              type: object
+              properties:
+                batchCode:
+                  type: string
+                  description: Mã lô nuôi trồng (Độc nhất)
+                facilityId:
+                  type: integer
+                  description: ID cơ sở sản xuất
+                mushroomId:
+                  type: integer
+                  description: ID giống nấm
+                startDate:
+                  type: string
+                  format: date-time
+                  description: Ngày bắt đầu (chuỗi định dạng ISO)
               $ref: '#/components/schemas/CultivationBatch'
       responses:
         '201':
@@ -491,6 +536,7 @@ paths:
         content:
           application/json:
             schema:
+              type: object
               $ref: '#/components/schemas/CultivationBatch'
       responses:
         '200':
