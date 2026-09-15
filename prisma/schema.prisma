@@ -169,5 +169,49 @@ model CultivationBatch {
   createdAt           DateTime        @default(now()) @map("created_at")
   updatedAt           DateTime        @updatedAt @map("updated_at")
 
+  careLogs            CultivationCareLog[]
+  growthRecords       GrowthProgressRecord[]
+  harvestRecords      HarvestRecord[]
+
   @@map("cultivation_batches")
+}
+
+model CultivationCareLog {
+  id          Int      @id @default(autoincrement())
+  batchId     Int      @map("batch_id")
+  actionType  String   @map("action_type")
+  notes       String   @db.Text
+  recordedAt  DateTime @default(now()) @map("recorded_at")
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  batch       CultivationBatch @relation(fields: [batchId], references: [id], onDelete: Cascade)
+
+  @@map("cultivation_care_logs")
+}
+
+model GrowthProgressRecord {
+  id          Int      @id @default(autoincrement())
+  batchId     Int      @map("batch_id")
+  stage       String   @map("stage")
+  notes       String   @db.Text
+  recordedAt  DateTime @default(now()) @map("recorded_at")
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  batch       CultivationBatch @relation(fields: [batchId], references: [id], onDelete: Cascade)
+
+  @@map("growth_progress_records")
+}
+
+model HarvestRecord {
+  id              Int      @id @default(autoincrement())
+  batchId         Int      @map("batch_id")
+  harvestedAt     DateTime @default(now()) @map("harvested_at")
+  totalYieldKg    Float    @map("total_yield_kg")
+  qualityGrade    String?  @map("quality_grade")
+  notes           String?  @db.Text
+  createdAt       DateTime @default(now()) @map("created_at")
+
+  batch           CultivationBatch @relation(fields: [batchId], references: [id], onDelete: Cascade)
+
+  @@map("harvest_records")
 }
