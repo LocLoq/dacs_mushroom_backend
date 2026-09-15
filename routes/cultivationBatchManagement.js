@@ -96,6 +96,166 @@ router.post('/', authenticateToken, authorizeRoles(...global.privilegedRoles), a
     }
 });
 
+// 3a. GET /:id/care-logs - Nhật ký chấm sóc
+router.get('/:id/care-logs', authenticateToken, authorizeRoles(...global.allRoles), async (req, res) => {
+    try {
+        const batchId = parseInt(req.params.id);
+        const batch = await prisma.cultivationBatch.findUnique({ where: { id: batchId } });
+
+        if (!batch) return res.status(404).json({ message: 'Không tìm thấy lô nuôi trồng' });
+
+        const careLogs = await prisma.cultivationCareLog.findMany({
+            where: { batchId },
+            orderBy: { recordedAt: 'desc' }
+        });
+
+        res.json({ data: careLogs });
+    } catch (error) {
+        console.error(error);
+        res.status(500).json({ message: 'Lỗi máy chủ' });
+    }
+});
+
+router.post('/:id/care-logs', authenticateToken, authorizeRoles(...global.privilegedRoles), async (req, res) => {
+    try {
+        const batchId = parseInt(req.params.id);
+        const { actionType, notes, recordedAt } = req.body;
+
+        if (!actionType || !notes) {
+            return res.status(400).json({ message: 'Thiếu thông tin actionType hoặc notes' });
+        }
+
+        const batch = await prisma.cultivationBatch.findUnique({ where: { id: batchId } });
+        if (!batch) return res.status(404).json({ message: 'Không tìm thấy lô nuôi trồng' });
+
+        const careLog = await prisma.cultivationCareLog.create({
+            data: {
+                batchId,
+                actionType,
+                notes,
+                recordedAt: recordedAt ? new Date(recordedAt) : new Date()
+            }
+        });
+
+        res.status(201).json({ message: 'Ghi nhật ký chấm sóc thành công', data: careLog });
+    } catch (error) {
+        console.error(error);
+        res.status(400).json({ message: 'Dữ liệu không hợp lệ', error: error.message });
+    }
+});
+
+// 3b. GET /:id/growth-progress - Theo dõi quá trình sinh trưởng
+router.get('/:id/growth-progress', authenticateToken, authorizeRoles(...global.allRoles), async (req, res) => {
+    try {
+        const batchId = parseInt(req.params.id);
+        const batch = await prisma.cultivationBatch.findUnique({ where: { id: batchId } });
+
+        if (!batch) return res.status(404).json({ message: 'Không tìm thấy lô nuôi trồng' });
+
+        const growthRecords = await prisma.growthProgressRecord.findMany({
+            where: { batchId },
+            orderBy: { recordedAt: 'desc' }
+        });
+
+        res.json({ data: growthRecords });
+    } catch (error) {
+        console.error(error);
+        res.status(500).json({ message: 'Lỗi máy chủ' });
+    }
+});
+
+router.post('/:id/growth-progress', authenticateToken, authorizeRoles(...global.privilegedRoles), async (req, res) => {
+    try {
+        const batchId = parseInt(req.params.id);
+        const { stage, notes, recordedAt } = req.body;
+
+        if (!stage || !notes) {
+            return res.status(400).json({ message: 'Thiếu thông tin stage hoặc notes' });
+        }
+
+        const batch = await prisma.cultivationBatch.findUnique({ where: { id: batchId } });
+        if (!batch) return res.status(404).json({ message: 'Không tìm thấy lô nuôi trồng' });
+
+        const record = await prisma.growthProgressRecord.create({
+            data: {
+                batchId,
+                stage,
+                notes,
+                recordedAt: recordedAt ? new Date(recordedAt) : new Date()
+            }
+        });
+
+        res.status(201).json({ message: 'Cập nhật quá trình sinh trưởng thành công', data: record });
+    } catch (error) {
+        console.error(error);
+        res.status(400).json({ message: 'Dữ liệu không hợp lệ', error: error.message });
+    }
+});
+
+// 3c. GET /:id/harvests - Nhật ký thu hoạch
+router.get('/:id/harvests', authenticateToken, authorizeRoles(...global.allRoles), async (req, res) => {
+    try {
+        const batchId = parseInt(req.params.id);
+        const batch = await prisma.cultivationBatch.findUnique({ where: { id: batchId } });
+
+        if (!batch) return res.status(404).json({ message: 'Không tìm thấy lô nuôi trồng' });
+
+        const harvests = await prisma.harvestRecord.findMany({
+            where: { batchId },
+            orderBy: { harvestedAt: 'desc' }
+        });
+
+        res.json({ data: harvests });
+    } catch (error) {
+        console.error(error);
+        res.status(500).json({ message: 'Lỗi máy chủ' });
+    }
+});
+
+router.post('/:id/harvests', authenticateToken, authorizeRoles(...global.privilegedRoles), async (req, res) => {
+    try {
+        const batchId = parseInt(req.params.id);
+        const { totalYieldKg, qualityGrade, notes, harvestedAt, finalizeBatch } = req.body;
+
+        if (totalYieldKg === undefined || totalYieldKg === null) {
+            return res.status(400).json({ message: 'Thiếu thông tin totalYieldKg' });
+        }
+
+        const batch = await prisma.cultivationBatch.findUnique({ where: { id: batchId } });
+        if (!batch) return res.status(404).json({ message: 'Không tìm thấy lô nuôi trồng' });
+
+        const harvest = await prisma.$transaction(async (tx) => {
+            const created = await tx.harvestRecord.create({
+                data: {
+                    batchId,
+                    totalYieldKg: parseFloat(totalYieldKg),
+                    qualityGrade: qualityGrade || null,
+                    notes: notes || null,
+                    harvestedAt: harvestedAt ? new Date(harvestedAt) : new Date()
+                }
+            });
+
+            if (finalizeBatch) {
+                await tx.cultivationBatch.update({
+                    where: { id: batchId },
+                    data: {
+                        status: 'COMPLETED',
+                        actualYieldKg: parseFloat(totalYieldKg),
+                        endDate: new Date()
+                    }
+                });
+            }
+
+            return created;
+        });
+
+        res.status(201).json({ message: 'Ghi nhận kết quả thu hoạch thành công', data: harvest });
+    } catch (error) {
+        console.error(error);
+        res.status(400).json({ message: 'Dữ liệu không hợp lệ', error: error.message });
+    }
+});
+
 // 4. PUT /:id - Cập nhật thông tin lô nuôi trồng
 router.put('/:id', authenticateToken, authorizeRoles(...global.privilegedRoles), async (req, res) => {
     try {

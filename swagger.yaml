@@ -119,6 +119,50 @@ components:
           type: number
         notes:
           type: string
+    CultivationCareLog:
+      type: object
+      properties:
+        id:
+          type: integer
+        batchId:
+          type: integer
+        actionType:
+          type: string
+        notes:
+          type: string
+        recordedAt:
+          type: string
+          format: date-time
+    GrowthProgressRecord:
+      type: object
+      properties:
+        id:
+          type: integer
+        batchId:
+          type: integer
+        stage:
+          type: string
+        notes:
+          type: string
+        recordedAt:
+          type: string
+          format: date-time
+    HarvestRecord:
+      type: object
+      properties:
+        id:
+          type: integer
+        batchId:
+          type: integer
+        harvestedAt:
+          type: string
+          format: date-time
+        totalYieldKg:
+          type: number
+        qualityGrade:
+          type: string
+        notes:
+          type: string
 security:
   - bearerAuth: []
 paths:
@@ -554,3 +598,144 @@ paths:
       responses:
         '200':
           description: Xóa lô thành công
+
+  /api/cultivation-batches/{id}/care-logs:
+    get:
+      summary: Lấy nhật ký chấm sóc của lô nuôi trồng
+      tags: [Quản lý Lô Nuôi Trồng]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+          description: ID của lô nuôi trồng
+      responses:
+        '200':
+          description: Danh sách nhật ký chấm sóc
+    post:
+      summary: Ghi nhật ký chấm sóc cho lô nuôi trồng
+      tags: [Quản lý Lô Nuôi Trồng]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+          description: ID của lô nuôi trồng
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                actionType:
+                  type: string
+                  description: Loại hành động chấm sóc
+                notes:
+                  type: string
+                  description: Ghi chú chi tiết
+                recordedAt:
+                  type: string
+                  format: date-time
+                  description: Thời điểm ghi nhật ký
+      responses:
+        '201':
+          description: Ghi nhật ký chấm sóc thành công
+
+  /api/cultivation-batches/{id}/growth-progress:
+    get:
+      summary: Lấy tiến độ phát triển của lô nuôi trồng
+      tags: [Quản lý Lô Nuôi Trồng]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+          description: ID của lô nuôi trồng
+      responses:
+        '200':
+          description: Danh sách tiến độ sinh trưởng
+    post:
+      summary: Cập nhật tiến độ sinh trưởng của lô
+      tags: [Quản lý Lô Nuôi Trồng]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+          description: ID của lô nuôi trồng
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                stage:
+                  type: string
+                  description: Giai đoạn sinh trưởng
+                notes:
+                  type: string
+                  description: Mô tả chi tiết
+                recordedAt:
+                  type: string
+                  format: date-time
+                  description: Thời điểm ghi nhận
+      responses:
+        '201':
+          description: Cập nhật tiến độ sinh trưởng thành công
+
+  /api/cultivation-batches/{id}/harvests:
+    get:
+      summary: Lấy nhật ký thu hoạch của lô nuôi trồng
+      tags: [Quản lý Lô Nuôi Trồng]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+          description: ID của lô nuôi trồng
+      responses:
+        '200':
+          description: Danh sách các lần thu hoạch
+    post:
+      summary: Ghi nhận kết quả thu hoạch cho lô nuôi trồng
+      tags: [Quản lý Lô Nuôi Trồng]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+          description: ID của lô nuôi trồng
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                totalYieldKg:
+                  type: number
+                  description: Tổng sản lượng thu hoạch (kg)
+                qualityGrade:
+                  type: string
+                  description: Chất lượng sản phẩm
+                notes:
+                  type: string
+                  description: Ghi chú
+                harvestedAt:
+                  type: string
+                  format: date-time
+                  description: Thời điểm thu hoạch
+                finalizeBatch:
+                  type: boolean
+                  description: Có đánh dấu lô đã hoàn tất hay không
+      responses:
+        '201':
+          description: Ghi nhận thu hoạch thành công
