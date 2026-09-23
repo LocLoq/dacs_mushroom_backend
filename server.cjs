@@ -5,7 +5,6 @@ const { Server } = require('socket.io');
 const { loadEnvFile } = require('node:process');
 const { PrismaClient } = require('@prisma/client');
 const { PrismaMariaDb } = require('@prisma/adapter-mariadb');
-const mariadb = require('mariadb');
 const swaggerUi = require('swagger-ui-express');
 const YAML = require('yamljs');
 const path = require('path');
@@ -13,14 +12,14 @@ const { auditMiddleware } = require('./middlewares/audit');
 
 loadEnvFile();
 
-const pool = mariadb.createPool({
+const adapter = new PrismaMariaDb({
   host: process.env.DATABASE_HOST,
   user: process.env.DATABASE_USER,
   password: process.env.DATABASE_PASSWORD,
   database: process.env.DATABASE_NAME,
-  port: parseInt(process.env.DATABASE_PORT) || 3306
+  port: parseInt(process.env.DATABASE_PORT) || 3306,
+  connectionLimit: 5
 });
-const adapter = new PrismaMariaDb(pool);
 const prisma = new PrismaClient({ adapter });
 
 const app = express();
