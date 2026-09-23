@@ -10,6 +10,8 @@ const swaggerUi = require('swagger-ui-express');
 const YAML = require('yamljs');
 const path = require('path');
 
+loadEnvFile();
+
 const pool = mariadb.createPool({
   host: process.env.DATABASE_HOST,
   user: process.env.DATABASE_USER,
@@ -20,7 +22,6 @@ const pool = mariadb.createPool({
 const adapter = new PrismaMariaDb(pool);
 const prisma = new PrismaClient({ adapter });
 
-loadEnvFile();
 const app = express();
 const port = process.env.PORT || 8080;
 
@@ -44,7 +45,7 @@ app.use(express.urlencoded({ extended: true }));
 // api
 app.use('/api', require('./routes/test'));
 app.use('/api', require('./routes/login'));
-app.use('/api/mushroom', require('./routes/mushroom'));
+app.use('/api/mushroom-classifier', require('./routes/mushroomClassifier'));
 app.use('/api/mushroom-species', require('./routes/mushroomSpeciesManagement'));
 app.use('/api/admin', require('./routes/admin'));
 app.use('/api/production-facilities', require('./routes/productionFacilityManagement'));

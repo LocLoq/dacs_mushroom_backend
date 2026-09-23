@@ -116,7 +116,7 @@ router.get('/:id/care-logs', authenticateToken, authorizeRoles(...global.allRole
     }
 });
 
-router.post('/:id/care-logs', authenticateToken, authorizeRoles(...global.privilegedRoles), async (req, res) => {
+router.post('/:id/care-logs', authenticateToken, authorizeRoles(...global.allRoles), async (req, res) => {
     try {
         const batchId = parseInt(req.params.id);
         const { actionType, notes, recordedAt } = req.body;
@@ -144,17 +144,36 @@ router.post('/:id/care-logs', authenticateToken, authorizeRoles(...global.privil
     }
 });
 
+const parseGrowthProgressId = (value) => {
+    const id = Number(value);
+    return Number.isInteger(id) && id > 0 ? id : null;
+};
+
+const parseGrowthProgressDate = (value) => {
+    if (typeof value !== 'string' || !value.trim()) return null;
+
+    const date = new Date(value);
+    return Number.isNaN(date.getTime()) ? null : date;
+};
+
 // 3b. GET /:id/growth-progress - Theo dõi quá trình sinh trưởng
 router.get('/:id/growth-progress', authenticateToken, authorizeRoles(...global.allRoles), async (req, res) => {
     try {
-        const batchId = parseInt(req.params.id);
+        const batchId = parseGrowthProgressId(req.params.id);
+        if (!batchId) {
+            return res.status(400).json({ message: 'ID lô nuôi trồng không hợp lệ' });
+        }
+
         const batch = await prisma.cultivationBatch.findUnique({ where: { id: batchId } });
 
         if (!batch) return res.status(404).json({ message: 'Không tìm thấy lô nuôi trồng' });
 
         const growthRecords = await prisma.growthProgressRecord.findMany({
             where: { batchId },
-            orderBy: { recordedAt: 'desc' }
+            orderBy: [
+                { recordedAt: 'desc' },
+                { id: 'desc' }
+            ]
         });
 
         res.json({ data: growthRecords });
@@ -164,13 +183,29 @@ router.get('/:id/growth-progress', authenticateToken, authorizeRoles(...global.a
     }
 });
 
-router.post('/:id/growth-progress', authenticateToken, authorizeRoles(...global.privilegedRoles), async (req, res) => {
+router.post('/:id/growth-progress', authenticateToken, authorizeRoles(...global.allRoles), async (req, res) => {
     try {
-        const batchId = parseInt(req.params.id);
-        const { stage, notes, recordedAt } = req.body;
+        const batchId = parseGrowthProgressId(req.params.id);
+        if (!batchId) {
+            return res.status(400).json({ message: 'ID lô nuôi trồng không hợp lệ' });
+        }
 
-        if (!stage || !notes) {
-            return res.status(400).json({ message: 'Thiếu thông tin stage hoặc notes' });
+        const { stage, notes, recordedAt } = req.body || {};
+
+        if (typeof stage !== 'string' || !stage.trim()) {
+            return res.status(400).json({ message: 'Giai đoạn sinh trưởng phải là chuỗi không được để trống' });
+        }
+
+        if (typeof notes !== 'string' || !notes.trim()) {
+            return res.status(400).json({ message: 'Ghi chú phải là chuỗi không được để trống' });
+        }
+
+        const parsedRecordedAt = recordedAt === undefined
+            ? new Date()
+            : parseGrowthProgressDate(recordedAt);
+
+        if (!parsedRecordedAt) {
+            return res.status(400).json({ message: 'Thời điểm ghi nhận không hợp lệ' });
         }
 
         const batch = await prisma.cultivationBatch.findUnique({ where: { id: batchId } });
@@ -179,16 +214,87 @@ router.post('/:id/growth-progress', authenticateToken, authorizeRoles(...global.
         const record = await prisma.growthProgressRecord.create({
             data: {
                 batchId,
-                stage,
-                notes,
-                recordedAt: recordedAt ? new Date(recordedAt) : new Date()
+                stage: stage.trim(),
+                notes: notes.trim(),
+                recordedAt: parsedRecordedAt
             }
         });
 
         res.status(201).json({ message: 'Cập nhật quá trình sinh trưởng thành công', data: record });
     } catch (error) {
         console.error(error);
-        res.status(400).json({ message: 'Dữ liệu không hợp lệ', error: error.message });
+        res.status(500).json({ message: 'Lỗi máy chủ' });
+    }
+});
+
+router.patch('/:id/growth-progress/:recordId', authenticateToken, authorizeRoles(...global.allRoles), async (req, res) => {
+    try {
+        const batchId = parseGrowthProgressId(req.params.id);
+        if (!batchId) {
+            return res.status(400).json({ message: 'ID lô nuôi trồng không hợp lệ' });
+        }
+
+        const recordId = parseGrowthProgressId(req.params.recordId);
+        if (!recordId) {
+            return res.status(400).json({ message: 'ID bản ghi quá trình sinh trưởng không hợp lệ' });
+        }
+
+        const requestData = req.body || {};
+        const allowedFields = ['stage', 'notes', 'recordedAt'];
+        const providedFields = Object.keys(requestData);
+
+        if (providedFields.length === 0) {
+            return res.status(400).json({ message: 'Cần cung cấp ít nhất một trường để cập nhật' });
+        }
+
+        if (providedFields.some((field) => !allowedFields.includes(field))) {
+            return res.status(400).json({ message: 'Chỉ được phép cập nhật stage, notes hoặc recordedAt' });
+        }
+
+        const updateData = {};
+
+        if (Object.prototype.hasOwnProperty.call(requestData, 'stage')) {
+            if (typeof requestData.stage !== 'string' || !requestData.stage.trim()) {
+                return res.status(400).json({ message: 'Giai đoạn sinh trưởng phải là chuỗi không được để trống' });
+            }
+            updateData.stage = requestData.stage.trim();
+        }
+
+        if (Object.prototype.hasOwnProperty.call(requestData, 'notes')) {
+            if (typeof requestData.notes !== 'string' || !requestData.notes.trim()) {
+                return res.status(400).json({ message: 'Ghi chú phải là chuỗi không được để trống' });
+            }
+            updateData.notes = requestData.notes.trim();
+        }
+
+        if (Object.prototype.hasOwnProperty.call(requestData, 'recordedAt')) {
+            const parsedRecordedAt = parseGrowthProgressDate(requestData.recordedAt);
+            if (!parsedRecordedAt) {
+                return res.status(400).json({ message: 'Thời điểm ghi nhận không hợp lệ' });
+            }
+            updateData.recordedAt = parsedRecordedAt;
+        }
+
+        const batch = await prisma.cultivationBatch.findUnique({ where: { id: batchId } });
+        if (!batch) return res.status(404).json({ message: 'Không tìm thấy lô nuôi trồng' });
+
+        const existingRecord = await prisma.growthProgressRecord.findFirst({
+            where: { id: recordId, batchId }
+        });
+
+        if (!existingRecord) {
+            return res.status(404).json({ message: 'Không tìm thấy bản ghi quá trình sinh trưởng' });
+        }
+
+        const updatedRecord = await prisma.growthProgressRecord.update({
+            where: { id: recordId },
+            data: updateData
+        });
+
+        res.json({ message: 'Cập nhật quá trình sinh trưởng thành công', data: updatedRecord });
+    } catch (error) {
+        console.error(error);
+        res.status(500).json({ message: 'Lỗi máy chủ' });
     }
 });
 
@@ -212,7 +318,7 @@ router.get('/:id/harvests', authenticateToken, authorizeRoles(...global.allRoles
     }
 });
 
-router.post('/:id/harvests', authenticateToken, authorizeRoles(...global.privilegedRoles), async (req, res) => {
+router.post('/:id/harvests', authenticateToken, authorizeRoles(...global.allRoles), async (req, res) => {
     try {
         const batchId = parseInt(req.params.id);
         const { totalYieldKg, qualityGrade, notes, harvestedAt, finalizeBatch } = req.body;
@@ -257,7 +363,7 @@ router.post('/:id/harvests', authenticateToken, authorizeRoles(...global.privile
 });
 
 // 4. PUT /:id - Cập nhật thông tin lô nuôi trồng
-router.put('/:id', authenticateToken, authorizeRoles(...global.privilegedRoles), async (req, res) => {
+router.put('/:id', authenticateToken, authorizeRoles(...global.allRoles), async (req, res) => {
     try {
         const id = parseInt(req.params.id);
         const batchData = req.body;

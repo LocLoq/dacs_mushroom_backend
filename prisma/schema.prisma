@@ -28,190 +28,194 @@ model User {
 
   @@map("users")
 }
+
 enum EcologyType {
-  SAPROBIC     // Hoại sinh (phân hủy mùn hữu cơ)
-  MYCORRHIZAL  // Cộng sinh (với rễ cây)
-  PARASITIC    // Ký sinh (trên sinh vật sống khác)
+  SAPROBIC // Hoại sinh (phân hủy mùn hữu cơ)
+  MYCORRHIZAL // Cộng sinh (với rễ cây)
+  PARASITIC // Ký sinh (trên sinh vật sống khác)
 }
 
 enum EdibilityStatus {
-  CHOICE       // Ngon, tuyệt hảo
-  EDIBLE       // Ăn được (có thể cần chế biến)
-  INEDIBLE     // Không ăn được (do mùi vị, kết cấu)
-  POISONOUS    // Có độc
-  DEADLY       // Độc chết người
+  CHOICE // Ngon, tuyệt hảo
+  EDIBLE // Ăn được (có thể cần chế biến)
+  INEDIBLE // Không ăn được (do mùi vị, kết cấu)
+  POISONOUS // Có độc
+  DEADLY // Độc chết người
 }
 
 enum CultivationDifficulty {
-  EASY         // Dễ trồng
-  MEDIUM       // Trung bình
-  HARD         // Khó trồng
+  EASY // Dễ trồng
+  MEDIUM // Trung bình
+  HARD // Khó trồng
   UNCULTIVABLE // Không thể trồng nhân tạo (vd: nấm cục Truffle)
 }
+
 enum FacilityType {
-  HOUSEHOLD     // Hộ kinh doanh cá thể
-  COOPERATIVE   // Hợp tác xã
-  ENTERPRISE    // Doanh nghiệp / Công ty
+  HOUSEHOLD // Hộ kinh doanh cá thể
+  COOPERATIVE // Hợp tác xã
+  ENTERPRISE // Doanh nghiệp / Công ty
 }
 
 enum FacilityStatus {
-  ACTIVE        // Đang hoạt động
-  SUSPENDED     // Tạm ngưng
-  CLOSED        // Đã đóng cửa
+  ACTIVE // Đang hoạt động
+  SUSPENDED // Tạm ngưng
+  CLOSED // Đã đóng cửa
 }
 
 enum BatchStatus {
   PREPARATION // Chuẩn bị cơ chất/trại
-  INCUBATION  // Ủ tơ
-  FRUITING    // Ra quả thể
-  HARVESTING  // Đang thu hoạch
-  COMPLETED   // Đã hoàn tất & dọn trại
-  FAILED      // Bị hỏng/nhiễm bệnh toàn lô
+  INCUBATION // Ủ tơ
+  FRUITING // Ra quả thể
+  HARVESTING // Đang thu hoạch
+  COMPLETED // Đã hoàn tất & dọn trại
+  FAILED // Bị hỏng/nhiễm bệnh toàn lô
 }
+
 // ------------------------------------------------------
 // MODELS (Bảng dữ liệu)
 // ------------------------------------------------------
 
 model Mushroom {
-  id                    Int                    @id @default(autoincrement())
-  
+  id Int @id @default(autoincrement())
+
   // 1. Phân loại học (Taxonomy)
-  scientificName        String                 @unique @map("scientific_name")
-  commonName            String                 @map("common_name")
-  otherNames            String?                @map("other_names")
-  family                String
-  genus                 String
+  scientificName String  @unique @map("scientific_name")
+  commonName     String  @map("common_name")
+  otherNames     String? @map("other_names")
+  family         String
+  genus          String
 
   // 2. Hình thái học (Morphology)
-  capDescription        String?                @db.Text @map("cap_description")
-  gillsDescription      String?                @db.Text @map("gills_description")
-  stemDescription       String?                @db.Text @map("stem_description")
-  sporePrintColor       String?                @map("spore_print_color")
-  bruisingBehavior      String?                @map("bruising_behavior") // Phản ứng đổi màu khi xước
+  capDescription   String? @map("cap_description") @db.Text
+  gillsDescription String? @map("gills_description") @db.Text
+  stemDescription  String? @map("stem_description") @db.Text
+  sporePrintColor  String? @map("spore_print_color")
+  bruisingBehavior String? @map("bruising_behavior") // Phản ứng đổi màu khi xước
 
   // 3. Sinh thái & Môi trường sống (Ecology & Habitat)
-  ecologyType           EcologyType?           @map("ecology_type")
-  habitat               String?                @db.Text
-  fruitingSeason        String?                @map("fruiting_season")
+  ecologyType    EcologyType? @map("ecology_type")
+  habitat        String?      @db.Text
+  fruitingSeason String?      @map("fruiting_season")
 
   // 4. Giá trị sử dụng & Độc tính (Edibility & Toxicity)
-  edibilityStatus       EdibilityStatus        @map("edibility_status")
-  toxicitySymptoms      String?                @db.Text @map("toxicity_symptoms")
-  medicinalProperties   String?                @db.Text @map("medicinal_properties")
+  edibilityStatus     EdibilityStatus @map("edibility_status")
+  toxicitySymptoms    String?         @map("toxicity_symptoms") @db.Text
+  medicinalProperties String?         @map("medicinal_properties") @db.Text
 
   // 5. Nuôi trồng (Cultivation)
   cultivationDifficulty CultivationDifficulty? @map("cultivation_difficulty")
-  
+
   // 6. Đa phương tiện
-  imageUrl              String?                @map("image_url")
+  imageUrl String? @map("image_url")
 
   // Metadata
-  createdAt             DateTime               @default(now()) @map("created_at")
-  updatedAt             DateTime               @updatedAt @map("updated_at")
-  facilities            ProductionFacility[]   @relation("FacilityToMushroom")
+  createdAt          DateTime             @default(now()) @map("created_at")
+  updatedAt          DateTime             @updatedAt @map("updated_at")
+  facilities         ProductionFacility[] @relation("FacilityToMushroom")
+  cultivationBatches CultivationBatch[]
 
   @@map("mushroom_species") // Tên bảng thực tế trong Database
-  cultivationBatches CultivationBatch[]
 }
 
 model ProductionFacility {
-  id                  Int             @id @default(autoincrement())
-  name                String
-  taxCode             String?         @unique @map("tax_code")
-  address             String
-  province            String?         // Hỗ trợ truy vấn phân vùng địa lý nhanh
-  contactPhone        String?         @map("contact_phone")
-  contactEmail        String?         @map("contact_email")
-  
-  facilityType        FacilityType    @map("facility_type")
-  capacityTonsPerYear Float?          @map("capacity_tons_per_year")
-  totalAreaSqm        Float?          @map("total_area_sqm")
-  certifications      String?         // Ví dụ: "VietGAP, ISO 22000"
-  status              FacilityStatus  @default(ACTIVE)
+  id           Int     @id @default(autoincrement())
+  name         String
+  taxCode      String? @unique @map("tax_code")
+  address      String
+  province     String? // Hỗ trợ truy vấn phân vùng địa lý nhanh
+  contactPhone String? @map("contact_phone")
+  contactEmail String? @map("contact_email")
+
+  facilityType        FacilityType   @map("facility_type")
+  capacityTonsPerYear Float?         @map("capacity_tons_per_year")
+  totalAreaSqm        Float?         @map("total_area_sqm")
+  certifications      String? // Ví dụ: "VietGAP, ISO 22000"
+  status              FacilityStatus @default(ACTIVE)
 
   // Quan hệ Nhiều - Nhiều với bảng Giống nấm
-  mushrooms           Mushroom[]      @relation("FacilityToMushroom")
+  mushrooms Mushroom[] @relation("FacilityToMushroom")
 
-  createdAt           DateTime        @default(now()) @map("created_at")
-  updatedAt           DateTime        @updatedAt @map("updated_at")
+  createdAt          DateTime           @default(now()) @map("created_at")
+  updatedAt          DateTime           @updatedAt @map("updated_at")
+  cultivationBatches CultivationBatch[]
 
   @@map("production_facilities")
-  cultivationBatches CultivationBatch[]
 }
 
-
 model CultivationBatch {
-  id                  Int             @id @default(autoincrement())
-  batchCode           String          @unique @map("batch_code") 
-  
-  // Khóa ngoại
-  facilityId          Int             @map("facility_id")
-  mushroomId          Int             @map("mushroom_id")
-  facility            ProductionFacility @relation(fields: [facilityId], references: [id])
-  mushroom            Mushroom           @relation(fields: [mushroomId], references: [id])
-  
-  // Trạng thái & Vận hành
-  status              BatchStatus     @default(PREPARATION)
-  substrateType       String?         @map("substrate_type")
-  spawnSource         String?         @map("spawn_source")
-  bagQuantity         Int?            @map("bag_quantity")
-  
-  // Tiến độ thời gian
-  startDate           DateTime        @map("start_date")
-  expectedHarvestDate DateTime?       @map("expected_harvest_date")
-  endDate             DateTime?       @map("end_date")
-  
-  // Năng suất & Đánh giá
-  actualYieldKg       Float?          @map("actual_yield_kg") 
-  defectRate          Float?          @map("defect_rate") // Tỷ lệ hao hụt (%)
-  notes               String?         @db.Text
-  
-  createdAt           DateTime        @default(now()) @map("created_at")
-  updatedAt           DateTime        @updatedAt @map("updated_at")
+  id        Int    @id @default(autoincrement())
+  batchCode String @unique @map("batch_code")
 
-  careLogs            CultivationCareLog[]
-  growthRecords       GrowthProgressRecord[]
-  harvestRecords      HarvestRecord[]
+  // Khóa ngoại
+  facilityId Int                @map("facility_id")
+  mushroomId Int                @map("mushroom_id")
+  facility   ProductionFacility @relation(fields: [facilityId], references: [id])
+  mushroom   Mushroom           @relation(fields: [mushroomId], references: [id])
+
+  // Trạng thái & Vận hành
+  status        BatchStatus @default(PREPARATION)
+  substrateType String?     @map("substrate_type")
+  spawnSource   String?     @map("spawn_source")
+  bagQuantity   Int?        @map("bag_quantity")
+
+  // Tiến độ thời gian
+  startDate           DateTime  @map("start_date")
+  expectedHarvestDate DateTime? @map("expected_harvest_date")
+  endDate             DateTime? @map("end_date")
+
+  // Năng suất & Đánh giá
+  actualYieldKg Float?  @map("actual_yield_kg")
+  defectRate    Float?  @map("defect_rate") // Tỷ lệ hao hụt (%)
+  notes         String? @db.Text
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  careLogs       CultivationCareLog[]
+  growthRecords  GrowthProgressRecord[]
+  harvestRecords HarvestRecord[]
 
   @@map("cultivation_batches")
 }
 
 model CultivationCareLog {
-  id          Int      @id @default(autoincrement())
-  batchId     Int      @map("batch_id")
-  actionType  String   @map("action_type")
-  notes       String   @db.Text
-  recordedAt  DateTime @default(now()) @map("recorded_at")
-  createdAt   DateTime @default(now()) @map("created_at")
+  id         Int      @id @default(autoincrement())
+  batchId    Int      @map("batch_id")
+  actionType String   @map("action_type")
+  notes      String   @db.Text
+  recordedAt DateTime @default(now()) @map("recorded_at")
+  createdAt  DateTime @default(now()) @map("created_at")
 
-  batch       CultivationBatch @relation(fields: [batchId], references: [id], onDelete: Cascade)
+  batch CultivationBatch @relation(fields: [batchId], references: [id], onDelete: Cascade)
 
   @@map("cultivation_care_logs")
 }
 
 model GrowthProgressRecord {
-  id          Int      @id @default(autoincrement())
-  batchId     Int      @map("batch_id")
-  stage       String   @map("stage")
-  notes       String   @db.Text
-  recordedAt  DateTime @default(now()) @map("recorded_at")
-  createdAt   DateTime @default(now()) @map("created_at")
+  id         Int      @id @default(autoincrement())
+  batchId    Int      @map("batch_id")
+  stage      String   @map("stage")
+  notes      String   @db.Text
+  recordedAt DateTime @default(now()) @map("recorded_at")
+  createdAt  DateTime @default(now()) @map("created_at")
+  updatedAt  DateTime @default(now()) @updatedAt @map("updated_at")
 
-  batch       CultivationBatch @relation(fields: [batchId], references: [id], onDelete: Cascade)
+  batch CultivationBatch @relation(fields: [batchId], references: [id], onDelete: Cascade)
 
+  @@index([batchId, recordedAt])
   @@map("growth_progress_records")
 }
 
 model HarvestRecord {
-  id              Int      @id @default(autoincrement())
-  batchId         Int      @map("batch_id")
-  harvestedAt     DateTime @default(now()) @map("harvested_at")
-  totalYieldKg    Float    @map("total_yield_kg")
-  qualityGrade    String?  @map("quality_grade")
-  notes           String?  @db.Text
-  createdAt       DateTime @default(now()) @map("created_at")
+  id           Int      @id @default(autoincrement())
+  batchId      Int      @map("batch_id")
+  harvestedAt  DateTime @default(now()) @map("harvested_at")
+  totalYieldKg Float    @map("total_yield_kg")
+  qualityGrade String?  @map("quality_grade")
+  notes        String?  @db.Text
+  createdAt    DateTime @default(now()) @map("created_at")
 
-  batch           CultivationBatch @relation(fields: [batchId], references: [id], onDelete: Cascade)
+  batch CultivationBatch @relation(fields: [batchId], references: [id], onDelete: Cascade)
 
   @@map("harvest_records")
 }

@@ -135,11 +135,14 @@ components:
           format: date-time
     GrowthProgressRecord:
       type: object
+      required: [id, batchId, stage, notes, recordedAt, createdAt, updatedAt]
       properties:
         id:
           type: integer
+          readOnly: true
         batchId:
           type: integer
+          readOnly: true
         stage:
           type: string
         notes:
@@ -147,6 +150,22 @@ components:
         recordedAt:
           type: string
           format: date-time
+        createdAt:
+          type: string
+          format: date-time
+          readOnly: true
+        updatedAt:
+          type: string
+          format: date-time
+          readOnly: true
+    ErrorResponse:
+      type: object
+      required: [message]
+      properties:
+        message:
+          type: string
+        error:
+          type: string
     HarvestRecord:
       type: object
       properties:
@@ -658,6 +677,46 @@ paths:
       responses:
         '200':
           description: Danh sách tiến độ sinh trưởng
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/GrowthProgressRecord'
+        '400':
+          description: ID lô nuôi trồng không hợp lệ
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: Chưa cung cấp token xác thực
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: Token không hợp lệ, hết hạn hoặc không đủ quyền
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Không tìm thấy lô nuôi trồng
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Lỗi máy chủ
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
     post:
       summary: Cập nhật tiến độ sinh trưởng của lô
       tags: [Quản lý Lô Nuôi Trồng]
@@ -674,6 +733,8 @@ paths:
           application/json:
             schema:
               type: object
+              required: [stage, notes]
+              additionalProperties: false
               properties:
                 stage:
                   type: string
@@ -688,6 +749,126 @@ paths:
       responses:
         '201':
           description: Cập nhật tiến độ sinh trưởng thành công
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [message, data]
+                properties:
+                  message:
+                    type: string
+                  data:
+                    $ref: '#/components/schemas/GrowthProgressRecord'
+        '400':
+          description: ID lô, dữ liệu hoặc thời điểm ghi nhận không hợp lệ
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: Chưa cung cấp token xác thực
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: Token không hợp lệ, hết hạn hoặc không đủ quyền
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Không tìm thấy lô nuôi trồng
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Lỗi máy chủ
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/cultivation-batches/{id}/growth-progress/{recordId}:
+    patch:
+      summary: Cập nhật một bản ghi tiến độ sinh trưởng
+      tags: [Quản lý Lô Nuôi Trồng]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+          description: ID của lô nuôi trồng
+        - name: recordId
+          in: path
+          required: true
+          schema:
+            type: integer
+          description: ID của bản ghi tiến độ sinh trưởng
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              minProperties: 1
+              additionalProperties: false
+              properties:
+                stage:
+                  type: string
+                  description: Giai đoạn sinh trưởng mới
+                notes:
+                  type: string
+                  description: Mô tả chi tiết mới
+                recordedAt:
+                  type: string
+                  format: date-time
+                  description: Thời điểm ghi nhận mới
+      responses:
+        '200':
+          description: Cập nhật bản ghi tiến độ sinh trưởng thành công
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [message, data]
+                properties:
+                  message:
+                    type: string
+                  data:
+                    $ref: '#/components/schemas/GrowthProgressRecord'
+        '400':
+          description: ID, dữ liệu hoặc thời điểm ghi nhận không hợp lệ
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: Chưa cung cấp token xác thực
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: Token không hợp lệ, hết hạn hoặc không đủ quyền
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Không tìm thấy lô nuôi trồng hoặc bản ghi tiến độ
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Lỗi máy chủ
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
 
   /api/cultivation-batches/{id}/harvests:
     get:
