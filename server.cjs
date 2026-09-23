@@ -9,6 +9,7 @@ const mariadb = require('mariadb');
 const swaggerUi = require('swagger-ui-express');
 const YAML = require('yamljs');
 const path = require('path');
+const { auditMiddleware } = require('./middlewares/audit');
 
 loadEnvFile();
 
@@ -41,6 +42,8 @@ global.privilegedRoles = privilegedRoles;
 app.use(cors());
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
+app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
+app.use('/api', auditMiddleware);
 
 // api
 app.use('/api', require('./routes/test'));
@@ -50,6 +53,8 @@ app.use('/api/mushroom-species', require('./routes/mushroomSpeciesManagement'));
 app.use('/api/admin', require('./routes/admin'));
 app.use('/api/production-facilities', require('./routes/productionFacilityManagement'));
 app.use('/api/cultivation-batches', require('./routes/cultivationBatchManagement'));
+app.use('/api/reports', require('./routes/reports'));
+app.use('/api/public', require('./routes/publicGrowth'));
 
 // Swagger UI
 const swaggerDocument = YAML.load(path.join(__dirname, 'swagger.yaml'));
@@ -59,9 +64,24 @@ app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(swaggerDocument));
 io.on('connection', (socket) => {
   console.log('A client connected');
   
-  socket.on('subscribe_job', (jobId) => {
+  socket.on('subscribe_job', async (jobId) => {
+    if (typeof jobId !== 'string' || !/^[0-9a-f]{8}-[0-9a-f-]{27}$/i.test(jobId)) return;
     socket.join(`job_${jobId}`);
     console.log(`Socket ${socket.id} joined room job_${jobId}`);
+
+    try {
+      const lookup = await prisma.classifierLookup.findUnique({ where: { id: jobId } });
+      if (!lookup) return;
+      if (lookup.status === 'SUCCEEDED') {
+        socket.emit('finished', { jobId, status: lookup.status, result: lookup.result });
+      } else if (lookup.status === 'FAILED') {
+        socket.emit('failed', { jobId, status: lookup.status, message: 'Phân loại thất bại' });
+      } else {
+        socket.emit('processing', { jobId, status: lookup.status, message: 'Yêu cầu đang được xử lý' });
+      }
+    } catch (error) {
+      console.error('Unable to replay classifier status:', error.message);
+    }
   });
 
   socket.on('disconnect', () => {

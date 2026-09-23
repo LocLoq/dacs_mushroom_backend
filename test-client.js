@@ -22,16 +22,22 @@ async function runTest() {
         process.exit(0);
     });
 
+    socket.on('failed', (data) => {
+        console.error('Received classifier failure:', data);
+        socket.disconnect();
+        process.exit(1);
+    });
+
     // Create a dummy image file for testing
     fs.writeFileSync('dummy.jpg', 'fake image content');
 
     const form = new FormData();
     form.append('image', fs.createReadStream('dummy.jpg'));
 
-    console.log('Sending POST request to /api/mushroom/classify...');
+    console.log('Sending POST request to /api/mushroom-classifier/classify...');
     
     try {
-        const response = await axios.post('http://localhost:8080/api/mushroom/classify', form, {
+        const response = await axios.post('http://localhost:8080/api/mushroom-classifier/classify', form, {
             headers: form.getHeaders()
         });
         
@@ -51,4 +57,3 @@ async function runTest() {
 }
 
 runTest();
-

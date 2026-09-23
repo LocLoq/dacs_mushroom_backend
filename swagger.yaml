@@ -158,6 +158,35 @@ components:
           type: string
           format: date-time
           readOnly: true
+        images:
+          type: array
+          items:
+            $ref: '#/components/schemas/GrowthProgressImage'
+    GrowthProgressImage:
+      type: object
+      required: [id, growthProgressId, imageUrl, originalName, mimeType, fileSize, createdAt]
+      properties:
+        id:
+          type: integer
+          readOnly: true
+        growthProgressId:
+          type: integer
+          readOnly: true
+        imageUrl:
+          type: string
+          description: Duong dan cong khai cua anh thuc te
+        originalName:
+          type: string
+        mimeType:
+          type: string
+          example: image/jpeg
+        fileSize:
+          type: integer
+          description: Kich thuoc tep tinh bang byte
+        createdAt:
+          type: string
+          format: date-time
+          readOnly: true
     ErrorResponse:
       type: object
       required: [message]
@@ -166,6 +195,74 @@ components:
           type: string
         error:
           type: string
+    ClassifierLookup:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        status:
+          type: string
+          enum: [QUEUED, PROCESSING, SUCCEEDED, FAILED]
+        originalName:
+          type: string
+        mimeType:
+          type: string
+        fileSize:
+          type: integer
+        predictedName:
+          type: string
+          nullable: true
+        edibility:
+          type: string
+          nullable: true
+        confidence:
+          type: number
+          nullable: true
+        result:
+          type: object
+          nullable: true
+        errorMessage:
+          type: string
+          nullable: true
+        createdAt:
+          type: string
+          format: date-time
+        completedAt:
+          type: string
+          format: date-time
+          nullable: true
+    AuditLog:
+      type: object
+      properties:
+        id:
+          type: integer
+        actorUsername:
+          type: string
+          nullable: true
+        actorRole:
+          type: string
+          nullable: true
+        action:
+          type: string
+        entityType:
+          type: string
+          nullable: true
+        entityId:
+          type: string
+          nullable: true
+        method:
+          type: string
+        path:
+          type: string
+        statusCode:
+          type: integer
+        outcome:
+          type: string
+          enum: [SUCCESS, FAILURE]
+        createdAt:
+          type: string
+          format: date-time
     HarvestRecord:
       type: object
       properties:
@@ -182,6 +279,29 @@ components:
           type: string
         notes:
           type: string
+  parameters:
+    ReportFrom:
+      name: from
+      in: query
+      schema: { type: string, format: date }
+      description: Ngày bắt đầu, mặc định là đầu năm hiện tại
+    ReportTo:
+      name: to
+      in: query
+      schema: { type: string, format: date }
+      description: Ngày kết thúc, mặc định là hôm nay
+    FacilityId:
+      name: facilityId
+      in: query
+      schema: { type: integer }
+    MushroomId:
+      name: mushroomId
+      in: query
+      schema: { type: integer }
+    GroupBy:
+      name: groupBy
+      in: query
+      schema: { type: string, enum: [day, month], default: month }
 security:
   - bearerAuth: []
 paths:
@@ -196,6 +316,7 @@ paths:
           application/json:
             schema:
               type: object
+              required: [username, password, full_name, phone_number, email, role_id]
               properties:
                 username:
                   type: string
@@ -209,10 +330,11 @@ paths:
         '401':
           description: Tên đăng nhập hoặc mật khẩu không chính xác
   
-  /api/mushroom/classify:
+  /api/mushroom-classifier/classify:
     post:
       summary: Tải ảnh nấm lên để AI phân loại
       tags: [Phân loại Nấm]
+      security: []
       requestBody:
         required: true
         content:
@@ -225,9 +347,146 @@ paths:
                   format: binary
                   description: File hình ảnh của nấm cần phân loại
       responses:
-        '200':
-          description: Trả về jobId để client kết nối qua Socket.IO và nhận kết quả
+        '202':
+          description: Đã tiếp nhận yêu cầu phân loại
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  jobId:
+                    type: string
+                    format: uuid
+                  status:
+                    type: string
+                    example: QUEUED
           
+  /api/mushroom-classifier/history:
+    get:
+      summary: Xem lịch sử tra cứu mushroom classifier
+      tags: [Phân loại Nấm]
+      parameters:
+        - name: page
+          in: query
+          schema: { type: integer }
+        - name: limit
+          in: query
+          schema: { type: integer }
+        - name: status
+          in: query
+          schema: { type: string, enum: [QUEUED, PROCESSING, SUCCEEDED, FAILED] }
+        - name: predictedName
+          in: query
+          schema: { type: string }
+        - name: from
+          in: query
+          schema: { type: string, format: date-time }
+        - name: to
+          in: query
+          schema: { type: string, format: date-time }
+      responses:
+        '200':
+          description: Danh sách lượt tra cứu
+  /api/mushroom-classifier/history/{id}:
+    get:
+      summary: Xem chi tiết một lượt tra cứu classifier
+      tags: [Phân loại Nấm]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '200':
+          description: Chi tiết lượt tra cứu
+  /api/admin/audit-logs:
+    get:
+      summary: Xem audit log quản trị
+      tags: [Quản trị viên]
+      parameters:
+        - name: page
+          in: query
+          schema: { type: integer }
+        - name: limit
+          in: query
+          schema: { type: integer }
+        - name: actorUserId
+          in: query
+          schema: { type: integer }
+        - name: action
+          in: query
+          schema: { type: string }
+        - name: outcome
+          in: query
+          schema: { type: string, enum: [SUCCESS, FAILURE] }
+      responses:
+        '200':
+          description: Danh sách audit log
+  /api/reports/overview:
+    get:
+      summary: Xem thống kê tổng hợp hệ thống
+      tags: [Báo cáo]
+      parameters:
+        - $ref: '#/components/parameters/ReportFrom'
+        - $ref: '#/components/parameters/ReportTo'
+        - $ref: '#/components/parameters/FacilityId'
+        - $ref: '#/components/parameters/MushroomId'
+        - $ref: '#/components/parameters/GroupBy'
+      responses:
+        '200': { description: Thống kê tổng hợp }
+  /api/reports/cultivation:
+    get:
+      summary: Xem báo cáo lô nuôi trồng
+      tags: [Báo cáo]
+      responses:
+        '200': { description: Báo cáo nuôi trồng có phân trang }
+  /api/reports/classifier:
+    get:
+      summary: Xem báo cáo classifier
+      tags: [Báo cáo]
+      responses:
+        '200': { description: Báo cáo classifier có phân trang }
+  /api/reports/audit:
+    get:
+      summary: Xem báo cáo hoạt động audit
+      tags: [Báo cáo]
+      responses:
+        '200': { description: Báo cáo audit có phân trang }
+  /api/reports/{type}/export:
+    get:
+      summary: Xuất báo cáo CSV, XLSX hoặc PDF
+      tags: [Báo cáo]
+      parameters:
+        - name: type
+          in: path
+          required: true
+          schema: { type: string, enum: [overview, cultivation, classifier, audit] }
+        - name: format
+          in: query
+          required: true
+          schema: { type: string, enum: [csv, xlsx, pdf] }
+      responses:
+        '200':
+          description: File báo cáo
+          content:
+            text/csv: {}
+            application/vnd.openxmlformats-officedocument.spreadsheetml.sheet: {}
+            application/pdf: {}
+        '422': { description: Báo cáo quá lớn, cần thu hẹp bộ lọc }
+  /api/public/cultivation-batches/{batchCode}/growth-progress/current:
+    get:
+      summary: Xem tiến trình sinh trưởng hiện tại công khai
+      tags: [Tiến trình công khai]
+      security: []
+      parameters:
+        - name: batchCode
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200': { description: Tiến trình hiện tại hoặc null nếu chưa có dữ liệu }
+        '404': { description: Không tìm thấy lô }
+
   /api/admin/users:
     get:
       summary: Lấy danh sách tài khoản người dùng
@@ -270,6 +529,13 @@ paths:
                 full_name:
                   type: string
                   description: Họ và tên đầy đủ
+                phone_number:
+                  type: string
+                  description: Số điện thoại liên hệ
+                email:
+                  type: string
+                  format: email
+                  description: Email liên hệ
                 role_id:
                   type: integer
                   description: ID của quyền hạn (Role ID)
@@ -302,6 +568,11 @@ paths:
                 full_name:
                   type: string
                   description: Họ và tên mới
+                phone_number:
+                  type: string
+                email:
+                  type: string
+                  format: email
                 role_id:
                   type: integer
                   description: ID quyền hạn mới
@@ -746,6 +1017,25 @@ paths:
                   type: string
                   format: date-time
                   description: Thời điểm ghi nhận
+          multipart/form-data:
+            schema:
+              type: object
+              required: [stage, notes]
+              additionalProperties: false
+              properties:
+                stage:
+                  type: string
+                notes:
+                  type: string
+                recordedAt:
+                  type: string
+                  format: date-time
+                images:
+                  type: array
+                  description: Tối đa 5 ảnh JPEG, PNG hoặc WebP, mỗi ảnh không quá 5 MB
+                  items:
+                    type: string
+                    format: binary
       responses:
         '201':
           description: Cập nhật tiến độ sinh trưởng thành công
@@ -826,6 +1116,25 @@ paths:
                   type: string
                   format: date-time
                   description: Thời điểm ghi nhận mới
+          multipart/form-data:
+            schema:
+              type: object
+              minProperties: 1
+              additionalProperties: false
+              properties:
+                stage:
+                  type: string
+                notes:
+                  type: string
+                recordedAt:
+                  type: string
+                  format: date-time
+                images:
+                  type: array
+                  description: Ảnh mới được thêm vào bản ghi hiện có; tối đa 5 ảnh mỗi lần
+                  items:
+                    type: string
+                    format: binary
       responses:
         '200':
           description: Cập nhật bản ghi tiến độ sinh trưởng thành công

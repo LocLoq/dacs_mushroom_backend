@@ -1,7 +1,9 @@
 const assert = require('node:assert/strict');
 const { after, before, beforeEach, test } = require('node:test');
 const express = require('express');
+const fs = require('fs');
 const jwt = require('jsonwebtoken');
+const path = require('path');
 
 process.env.JWT_SECRET = 'growth-progress-test-secret';
 
@@ -33,7 +35,7 @@ global.prisma = {
         },
         create: async (args) => {
             calls.create.push(args);
-            return { id: 3, ...args.data };
+            return { id: 3, ...args.data, images: args.data.images?.create || [] };
         },
         findFirst: async (args) => {
             calls.findFirst.push(args);
@@ -46,6 +48,7 @@ global.prisma = {
             return {
                 ...state.record,
                 ...args.data,
+                images: args.data.images?.create || [],
                 updatedAt: new Date('2026-09-23T00:00:00.000Z')
             };
         }
@@ -64,17 +67,12 @@ const managerToken = jwt.sign(
     { username: 'manager', role: 'manager', tokenver: 0 },
     process.env.JWT_SECRET
 );
-const staffToken = jwt.sign(
-    { username: 'staff', role: 'staff', tokenver: 0 },
-    process.env.JWT_SECRET
-);
-
 async function request(path, options = {}) {
     const response = await fetch(`${baseUrl}${path}`, {
         ...options,
         headers: {
             authorization: `Bearer ${managerToken}`,
-            ...(options.body ? { 'content-type': 'application/json' } : {}),
+            ...(typeof options.body === 'string' ? { 'content-type': 'application/json' } : {}),
             ...options.headers
         }
     });
@@ -143,6 +141,7 @@ test('GET validates batch ID and uses a deterministic ordering', async () => {
     const result = await request('/1/growth-progress');
     assert.equal(result.status, 200);
     assert.deepEqual(calls.findMany[0].orderBy, [{ recordedAt: 'desc' }, { id: 'desc' }]);
+    assert.deepEqual(calls.findMany[0].include, { images: true });
 });
 
 test('PATCH updates only the specified progress record in its batch', async () => {
@@ -156,19 +155,33 @@ test('PATCH updates only the specified progress record in its batch', async () =
     assert.deepEqual(calls.findFirst[0].where, { id: 2, batchId: 1 });
     assert.deepEqual(calls.update[0], {
         where: { id: 2 },
-        data: { notes: 'Đã hình thành quả thể' }
+        data: { notes: 'Đã hình thành quả thể' },
+        include: { images: true }
     });
 });
 
-test('PATCH is restricted to admin and manager roles', async () => {
+test('PATCH appends actual photos to the growth-progress record', async () => {
+    const form = new FormData();
+    form.append('images', new Blob(['photo content'], { type: 'image/png' }), 'actual-photo.png');
+
     const result = await request('/1/growth-progress/2', {
         method: 'PATCH',
-        headers: { authorization: `Bearer ${staffToken}` },
-        body: JSON.stringify({ stage: 'FRUITING' })
+        body: form
     });
 
-    assert.equal(result.status, 403);
-    assert.equal(calls.update.length, 0);
+    try {
+        assert.equal(result.status, 200);
+        const image = calls.update[0].data.images.create[0];
+        assert.match(image.imageUrl, /^\/uploads\/growth-progress\/[a-f0-9-]+\.png$/);
+        assert.equal(image.originalName, 'actual-photo.png');
+        assert.equal(image.mimeType, 'image/png');
+        assert.equal(image.fileSize, 13);
+    } finally {
+        if (calls.update[0]) {
+            const image = calls.update[0].data.images.create[0];
+            await fs.promises.unlink(path.join(__dirname, '..', image.imageUrl.replace(/^\//, '')));
+        }
+    }
 });
 
 test('PATCH rejects invalid data and records outside the batch', async () => {

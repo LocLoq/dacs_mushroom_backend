@@ -1,12 +1,16 @@
 const express = require('express');
 const jwt = require('jsonwebtoken');
 const bcrypt = require('bcrypt');
+const { auditAction } = require('../middlewares/audit');
 
 
 const router = express.Router();
 const prisma = global.prisma;
 
-router.post('/login', async (req, res) => {
+router.post('/login', auditAction('LOGIN', {
+  entityType: 'User',
+  metadata: (req) => ({ username: req.body?.username || null })
+}), async (req, res) => {
   try {
     const { username, password } = req.body;
     
@@ -39,6 +43,8 @@ router.post('/login', async (req, res) => {
       role: user.role.name,
       tokenver: user.tokenver
     };
+
+    res.locals.auditActor = payload;
 
     const token = jwt.sign(payload, process.env.JWT_SECRET, { expiresIn: '2h' });
 

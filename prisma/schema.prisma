@@ -24,7 +24,9 @@ model User {
   role_id       Int
   tokenver      Int
 
-  role Role @relation(fields: [role_id], references: [id], onDelete: Cascade)
+  role              Role               @relation(fields: [role_id], references: [id], onDelete: Cascade)
+  classifierLookups ClassifierLookup[]
+  auditLogs         AuditLog[]
 
   @@map("users")
 }
@@ -69,6 +71,18 @@ enum BatchStatus {
   HARVESTING // Đang thu hoạch
   COMPLETED // Đã hoàn tất & dọn trại
   FAILED // Bị hỏng/nhiễm bệnh toàn lô
+}
+
+enum ClassifierLookupStatus {
+  QUEUED
+  PROCESSING
+  SUCCEEDED
+  FAILED
+}
+
+enum AuditOutcome {
+  SUCCESS
+  FAILURE
 }
 
 // ------------------------------------------------------
@@ -175,6 +189,10 @@ model CultivationBatch {
   growthRecords  GrowthProgressRecord[]
   harvestRecords HarvestRecord[]
 
+  @@index([startDate])
+  @@index([facilityId, startDate])
+  @@index([mushroomId, startDate])
+  @@index([status, startDate])
   @@map("cultivation_batches")
 }
 
@@ -200,10 +218,26 @@ model GrowthProgressRecord {
   createdAt  DateTime @default(now()) @map("created_at")
   updatedAt  DateTime @default(now()) @updatedAt @map("updated_at")
 
-  batch CultivationBatch @relation(fields: [batchId], references: [id], onDelete: Cascade)
+  batch  CultivationBatch      @relation(fields: [batchId], references: [id], onDelete: Cascade)
+  images GrowthProgressImage[]
 
   @@index([batchId, recordedAt])
   @@map("growth_progress_records")
+}
+
+model GrowthProgressImage {
+  id               Int      @id @default(autoincrement())
+  growthProgressId Int      @map("growth_progress_id")
+  imageUrl         String   @map("image_url") @db.VarChar(255)
+  originalName     String   @map("original_name") @db.VarChar(255)
+  mimeType         String   @map("mime_type") @db.VarChar(100)
+  fileSize         Int      @map("file_size")
+  createdAt        DateTime @default(now()) @map("created_at")
+
+  growthProgress GrowthProgressRecord @relation(fields: [growthProgressId], references: [id], onDelete: Cascade)
+
+  @@index([growthProgressId])
+  @@map("growth_progress_images")
 }
 
 model HarvestRecord {
@@ -217,5 +251,61 @@ model HarvestRecord {
 
   batch CultivationBatch @relation(fields: [batchId], references: [id], onDelete: Cascade)
 
+  @@index([harvestedAt])
+  @@index([batchId, harvestedAt])
   @@map("harvest_records")
+}
+
+model ClassifierLookup {
+  id            String                 @id @default(uuid()) @db.VarChar(36)
+  userId        Int?                   @map("user_id")
+  originalName  String                 @map("original_name") @db.VarChar(255)
+  mimeType      String                 @map("mime_type") @db.VarChar(100)
+  fileSize      Int                    @map("file_size")
+  status        ClassifierLookupStatus @default(QUEUED)
+  result        Json?
+  predictedName String?                @map("predicted_name") @db.VarChar(191)
+  edibility     String?                @db.VarChar(100)
+  confidence    Float?
+  errorMessage  String?                @map("error_message") @db.Text
+  queuedAt      DateTime               @default(now()) @map("queued_at")
+  startedAt     DateTime?              @map("started_at")
+  completedAt   DateTime?              @map("completed_at")
+  createdAt     DateTime               @default(now()) @map("created_at")
+  updatedAt     DateTime               @updatedAt @map("updated_at")
+
+  user User? @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([userId, createdAt])
+  @@index([status, createdAt])
+  @@index([createdAt])
+  @@map("classifier_lookups")
+}
+
+model AuditLog {
+  id            Int          @id @default(autoincrement())
+  actorUserId   Int?         @map("actor_user_id")
+  actorUsername String?      @map("actor_username") @db.VarChar(50)
+  actorRole     String?      @map("actor_role") @db.VarChar(50)
+  action        String       @db.VarChar(100)
+  entityType    String?      @map("entity_type") @db.VarChar(100)
+  entityId      String?      @map("entity_id") @db.VarChar(100)
+  method        String       @db.VarChar(10)
+  path          String       @db.VarChar(255)
+  statusCode    Int          @map("status_code")
+  outcome       AuditOutcome
+  ipAddress     String?      @map("ip_address") @db.VarChar(45)
+  userAgent     String?      @map("user_agent") @db.VarChar(512)
+  requestId     String?      @map("request_id") @db.VarChar(36)
+  durationMs    Int?         @map("duration_ms")
+  metadata      Json?
+  createdAt     DateTime     @default(now()) @map("created_at")
+
+  actor User? @relation(fields: [actorUserId], references: [id], onDelete: SetNull)
+
+  @@index([createdAt])
+  @@index([actorUserId, createdAt])
+  @@index([action, createdAt])
+  @@index([entityType, entityId])
+  @@map("audit_logs")
 }

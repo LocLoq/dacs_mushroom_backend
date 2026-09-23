@@ -6,9 +6,54 @@ const router = express.Router();
 const prisma = global.prisma;
 
 const { authenticateToken, authorizeRoles } = require('../middlewares/auth');
+const { auditAction } = require('../middlewares/audit');
 
 // Quản trị tài khoản chỉ dành cho admin
 const onlyAdmin = ['admin'];
+const managerAndAdmin = ['admin', 'manager'];
+
+const parsePositiveInteger = (value) => {
+    const parsed = Number(value);
+    return Number.isInteger(parsed) && parsed > 0 ? parsed : null;
+};
+
+const parseDate = (value) => {
+    if (!value) return undefined;
+    const date = new Date(value);
+    return Number.isNaN(date.getTime()) ? null : date;
+};
+
+router.get('/audit-logs', auditAction('AUDIT_LOG_VIEW', { entityType: 'AuditLog' }), authenticateToken, authorizeRoles(...managerAndAdmin), async (req, res) => {
+    try {
+        const page = parsePositiveInteger(req.query.page) || 1;
+        const limit = Math.min(parsePositiveInteger(req.query.limit) || 20, 100);
+        const actorUserId = req.query.actorUserId ? parsePositiveInteger(req.query.actorUserId) : undefined;
+        const statusCode = req.query.statusCode ? parsePositiveInteger(req.query.statusCode) : undefined;
+        const from = parseDate(req.query.from);
+        const to = parseDate(req.query.to);
+        if ((req.query.actorUserId && !actorUserId) || (req.query.statusCode && !statusCode) || (req.query.outcome && !['SUCCESS', 'FAILURE'].includes(req.query.outcome)) || from === null || to === null || (from && to && from > to)) {
+            return res.status(400).json({ message: 'Bộ lọc audit log không hợp lệ' });
+        }
+
+        const where = {
+            ...(actorUserId && { actorUserId }),
+            ...(req.query.action && { action: req.query.action }),
+            ...(req.query.entityType && { entityType: req.query.entityType }),
+            ...(req.query.entityId && { entityId: req.query.entityId }),
+            ...(req.query.outcome && { outcome: req.query.outcome }),
+            ...(statusCode && { statusCode }),
+            ...((from || to) && { createdAt: { ...(from && { gte: from }), ...(to && { lte: to }) } })
+        };
+        const [totalItems, data] = await Promise.all([
+            prisma.auditLog.count({ where }),
+            prisma.auditLog.findMany({ where, skip: (page - 1) * limit, take: limit, orderBy: { createdAt: 'desc' } })
+        ]);
+        res.json({ data, pagination: { totalItems, currentPage: page, totalPages: Math.ceil(totalItems / limit), pageSize: limit } });
+    } catch (error) {
+        console.error(error);
+        res.status(500).json({ message: 'Lỗi máy chủ' });
+    }
+});
 
 // 1. Lấy danh sách Users (kèm phân trang & tìm kiếm)
 router.get('/users', authenticateToken, authorizeRoles(...onlyAdmin), async (req, res) => {
@@ -74,10 +119,10 @@ router.get('/roles', authenticateToken, authorizeRoles(...onlyAdmin), async (req
 // 3. Tạo User mới
 router.post('/users', authenticateToken, authorizeRoles(...onlyAdmin), async (req, res) => {
     try {
-        const { username, password, full_name, role_id } = req.body;
+        const { username, password, full_name, role_id, phone_number, email } = req.body;
 
-        if (!username || !password || !full_name || !role_id) {
-            return res.status(400).json({ message: 'Vui lòng điền đủ thông tin (username, password, full_name, role_id)' });
+        if (!username || !password || !full_name || !role_id || !phone_number || !email) {
+            return res.status(400).json({ message: 'Vui lòng điền đủ thông tin (username, password, full_name, phone_number, email, role_id)' });
         }
 
         const existingUser = await prisma.user.findUnique({ where: { username } });
@@ -92,6 +137,8 @@ router.post('/users', authenticateToken, authorizeRoles(...onlyAdmin), async (re
                 username,
                 password_hash,
                 full_name,
+                phone_number,
+                email,
                 role_id: parseInt(role_id),
                 tokenver: 1
             },
@@ -109,10 +156,12 @@ router.post('/users', authenticateToken, authorizeRoles(...onlyAdmin), async (re
 router.put('/users/:id', authenticateToken, authorizeRoles(...onlyAdmin), async (req, res) => {
     try {
         const id = parseInt(req.params.id);
-        const { password, full_name, role_id } = req.body;
+        const { password, full_name, role_id, phone_number, email } = req.body;
         
         let updateData = {};
         if (full_name) updateData.full_name = full_name;
+        if (phone_number) updateData.phone_number = phone_number;
+        if (email) updateData.email = email;
         if (role_id) updateData.role_id = parseInt(role_id);
         
         if (password) {
@@ -149,4 +198,3 @@ router.delete('/users/:id', authenticateToken, authorizeRoles(...onlyAdmin), asy
 });
 
 module.exports = router;
-

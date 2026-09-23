@@ -1,6 +1,12 @@
 {
   "scripts": {
-    "test": "node --test test/growthProgress.test.js",
+    "test": "node --test test/*.test.js",
+    "test:python": "py -3.12 -m unittest discover -s helper/mushroom_classifier/tests -p \"test_*.py\"",
+    "test:all": "npm test && npm run test:python",
+    "test:coverage": "node --experimental-test-coverage --test test/*.test.js",
+    "classifier:serve": "py -3.12 helper/mushroom_classifier/server.py",
+    "start:stack": "node scripts/start-stack.cjs",
+    "db:seed": "node prisma/seed.cjs",
     "prisma:generate": "prisma generate",
     "prisma:validate": "prisma validate",
     "postinstall": "prisma generate"
@@ -13,12 +19,14 @@
     "bull": "^4.16.5",
     "cors": "^2.8.6",
     "dotenv": "^17.4.2",
+    "exceljs": "^4.4.0",
     "express": "^5.2.1",
     "form-data": "^4.0.6",
     "jsonwebtoken": "^9.0.3",
     "mariadb": "^3.5.3",
     "multer": "^2.2.0",
     "node-fetch": "^3.3.2",
+    "pdfmake": "^0.3.11",
     "prisma": "^7.9.1",
     "socket.io": "^4.8.3",
     "socket.io-client": "^4.8.3",

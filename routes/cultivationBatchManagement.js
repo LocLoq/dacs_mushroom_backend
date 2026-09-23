@@ -1,8 +1,63 @@
 const express = require('express');
+const crypto = require('crypto');
+const fs = require('fs');
+const path = require('path');
+const multer = require('multer');
 const router = express.Router();
 
 const { authenticateToken, authorizeRoles } = require('../middlewares/auth');
 const prisma = global.prisma;
+
+const growthProgressUploadDirectory = path.join(__dirname, '..', 'uploads', 'growth-progress');
+const growthProgressImageExtensions = {
+    'image/jpeg': '.jpg',
+    'image/png': '.png',
+    'image/webp': '.webp'
+};
+
+fs.mkdirSync(growthProgressUploadDirectory, { recursive: true });
+
+const growthProgressUpload = multer({
+    storage: multer.diskStorage({
+        destination: growthProgressUploadDirectory,
+        filename: (req, file, callback) => callback(
+            null,
+            `${crypto.randomUUID()}${growthProgressImageExtensions[file.mimetype]}`
+        )
+    }),
+    limits: {
+        fileSize: 5 * 1024 * 1024,
+        files: 5
+    },
+    fileFilter: (req, file, callback) => {
+        if (!growthProgressImageExtensions[file.mimetype]) {
+            return callback(new Error('Chỉ hỗ trợ ảnh JPEG, PNG hoặc WebP'));
+        }
+        callback(null, true);
+    }
+});
+
+const toGrowthProgressImageData = (files = []) => files.map((file) => ({
+    imageUrl: `/uploads/growth-progress/${file.filename}`,
+    originalName: file.originalname,
+    mimeType: file.mimetype,
+    fileSize: file.size
+}));
+
+const removeGrowthProgressUploadFiles = async (files = []) => {
+    await Promise.all(files.map(async (file) => {
+        try {
+            await fs.promises.unlink(file.path);
+        } catch (error) {
+            if (error.code !== 'ENOENT') console.error(error);
+        }
+    }));
+};
+
+const discardGrowthProgressFilesAndRespond = async (res, files, status, message) => {
+    await removeGrowthProgressUploadFiles(files);
+    return res.status(status).json({ message });
+};
 
 // 1. GET / - Lấy danh sách lô nuôi trồng (có phân trang và bộ lọc)
 router.get('/', authenticateToken, authorizeRoles(...global.allRoles), async (req, res) => {
@@ -170,6 +225,7 @@ router.get('/:id/growth-progress', authenticateToken, authorizeRoles(...global.a
 
         const growthRecords = await prisma.growthProgressRecord.findMany({
             where: { batchId },
+            include: { images: true },
             orderBy: [
                 { recordedAt: 'desc' },
                 { id: 'desc' }
@@ -183,21 +239,22 @@ router.get('/:id/growth-progress', authenticateToken, authorizeRoles(...global.a
     }
 });
 
-router.post('/:id/growth-progress', authenticateToken, authorizeRoles(...global.allRoles), async (req, res) => {
+router.post('/:id/growth-progress', authenticateToken, authorizeRoles(...global.allRoles), growthProgressUpload.array('images', 5), async (req, res) => {
     try {
+        const uploadedFiles = req.files || [];
         const batchId = parseGrowthProgressId(req.params.id);
         if (!batchId) {
-            return res.status(400).json({ message: 'ID lô nuôi trồng không hợp lệ' });
+            return discardGrowthProgressFilesAndRespond(res, uploadedFiles, 400, 'ID lô nuôi trồng không hợp lệ');
         }
 
         const { stage, notes, recordedAt } = req.body || {};
 
         if (typeof stage !== 'string' || !stage.trim()) {
-            return res.status(400).json({ message: 'Giai đoạn sinh trưởng phải là chuỗi không được để trống' });
+            return discardGrowthProgressFilesAndRespond(res, uploadedFiles, 400, 'Giai đoạn sinh trưởng phải là chuỗi không được để trống');
         }
 
         if (typeof notes !== 'string' || !notes.trim()) {
-            return res.status(400).json({ message: 'Ghi chú phải là chuỗi không được để trống' });
+            return discardGrowthProgressFilesAndRespond(res, uploadedFiles, 400, 'Ghi chú phải là chuỗi không được để trống');
         }
 
         const parsedRecordedAt = recordedAt === undefined
@@ -205,64 +262,70 @@ router.post('/:id/growth-progress', authenticateToken, authorizeRoles(...global.
             : parseGrowthProgressDate(recordedAt);
 
         if (!parsedRecordedAt) {
-            return res.status(400).json({ message: 'Thời điểm ghi nhận không hợp lệ' });
+            return discardGrowthProgressFilesAndRespond(res, uploadedFiles, 400, 'Thời điểm ghi nhận không hợp lệ');
         }
 
         const batch = await prisma.cultivationBatch.findUnique({ where: { id: batchId } });
-        if (!batch) return res.status(404).json({ message: 'Không tìm thấy lô nuôi trồng' });
+        if (!batch) return discardGrowthProgressFilesAndRespond(res, uploadedFiles, 404, 'Không tìm thấy lô nuôi trồng');
 
         const record = await prisma.growthProgressRecord.create({
             data: {
                 batchId,
                 stage: stage.trim(),
                 notes: notes.trim(),
-                recordedAt: parsedRecordedAt
-            }
+                recordedAt: parsedRecordedAt,
+                ...(uploadedFiles.length > 0 && {
+                    images: { create: toGrowthProgressImageData(uploadedFiles) }
+                })
+            },
+            include: { images: true }
         });
 
         res.status(201).json({ message: 'Cập nhật quá trình sinh trưởng thành công', data: record });
     } catch (error) {
         console.error(error);
+        await removeGrowthProgressUploadFiles(req.files || []);
         res.status(500).json({ message: 'Lỗi máy chủ' });
     }
 });
 
-router.patch('/:id/growth-progress/:recordId', authenticateToken, authorizeRoles(...global.allRoles), async (req, res) => {
+router.patch('/:id/growth-progress/:recordId', authenticateToken, authorizeRoles(...global.allRoles), growthProgressUpload.array('images', 5), async (req, res) => {
     try {
+        const uploadedFiles = req.files || [];
         const batchId = parseGrowthProgressId(req.params.id);
         if (!batchId) {
-            return res.status(400).json({ message: 'ID lô nuôi trồng không hợp lệ' });
+            return discardGrowthProgressFilesAndRespond(res, uploadedFiles, 400, 'ID lô nuôi trồng không hợp lệ');
         }
 
         const recordId = parseGrowthProgressId(req.params.recordId);
         if (!recordId) {
-            return res.status(400).json({ message: 'ID bản ghi quá trình sinh trưởng không hợp lệ' });
+            return discardGrowthProgressFilesAndRespond(res, uploadedFiles, 400, 'ID bản ghi quá trình sinh trưởng không hợp lệ');
         }
 
         const requestData = req.body || {};
         const allowedFields = ['stage', 'notes', 'recordedAt'];
         const providedFields = Object.keys(requestData);
 
-        if (providedFields.length === 0) {
-            return res.status(400).json({ message: 'Cần cung cấp ít nhất một trường để cập nhật' });
+        if (providedFields.length === 0 && uploadedFiles.length === 0) {
+            return discardGrowthProgressFilesAndRespond(res, uploadedFiles, 400, 'Cần cung cấp ít nhất một trường hoặc hình ảnh để cập nhật');
         }
 
         if (providedFields.some((field) => !allowedFields.includes(field))) {
-            return res.status(400).json({ message: 'Chỉ được phép cập nhật stage, notes hoặc recordedAt' });
+            return discardGrowthProgressFilesAndRespond(res, uploadedFiles, 400, 'Chỉ được phép cập nhật stage, notes, recordedAt hoặc hình ảnh');
         }
 
         const updateData = {};
 
         if (Object.prototype.hasOwnProperty.call(requestData, 'stage')) {
             if (typeof requestData.stage !== 'string' || !requestData.stage.trim()) {
-                return res.status(400).json({ message: 'Giai đoạn sinh trưởng phải là chuỗi không được để trống' });
+                return discardGrowthProgressFilesAndRespond(res, uploadedFiles, 400, 'Giai đoạn sinh trưởng phải là chuỗi không được để trống');
             }
             updateData.stage = requestData.stage.trim();
         }
 
         if (Object.prototype.hasOwnProperty.call(requestData, 'notes')) {
             if (typeof requestData.notes !== 'string' || !requestData.notes.trim()) {
-                return res.status(400).json({ message: 'Ghi chú phải là chuỗi không được để trống' });
+                return discardGrowthProgressFilesAndRespond(res, uploadedFiles, 400, 'Ghi chú phải là chuỗi không được để trống');
             }
             updateData.notes = requestData.notes.trim();
         }
@@ -270,30 +333,36 @@ router.patch('/:id/growth-progress/:recordId', authenticateToken, authorizeRoles
         if (Object.prototype.hasOwnProperty.call(requestData, 'recordedAt')) {
             const parsedRecordedAt = parseGrowthProgressDate(requestData.recordedAt);
             if (!parsedRecordedAt) {
-                return res.status(400).json({ message: 'Thời điểm ghi nhận không hợp lệ' });
+                return discardGrowthProgressFilesAndRespond(res, uploadedFiles, 400, 'Thời điểm ghi nhận không hợp lệ');
             }
             updateData.recordedAt = parsedRecordedAt;
         }
 
         const batch = await prisma.cultivationBatch.findUnique({ where: { id: batchId } });
-        if (!batch) return res.status(404).json({ message: 'Không tìm thấy lô nuôi trồng' });
+        if (!batch) return discardGrowthProgressFilesAndRespond(res, uploadedFiles, 404, 'Không tìm thấy lô nuôi trồng');
 
         const existingRecord = await prisma.growthProgressRecord.findFirst({
             where: { id: recordId, batchId }
         });
 
         if (!existingRecord) {
-            return res.status(404).json({ message: 'Không tìm thấy bản ghi quá trình sinh trưởng' });
+            return discardGrowthProgressFilesAndRespond(res, uploadedFiles, 404, 'Không tìm thấy bản ghi quá trình sinh trưởng');
+        }
+
+        if (uploadedFiles.length > 0) {
+            updateData.images = { create: toGrowthProgressImageData(uploadedFiles) };
         }
 
         const updatedRecord = await prisma.growthProgressRecord.update({
             where: { id: recordId },
-            data: updateData
+            data: updateData,
+            include: { images: true }
         });
 
         res.json({ message: 'Cập nhật quá trình sinh trưởng thành công', data: updatedRecord });
     } catch (error) {
         console.error(error);
+        await removeGrowthProgressUploadFiles(req.files || []);
         res.status(500).json({ message: 'Lỗi máy chủ' });
     }
 });
@@ -397,6 +466,23 @@ router.delete('/:id', authenticateToken, authorizeRoles(...global.privilegedRole
         console.error(error);
         res.status(400).json({ message: 'Không tìm thấy lô nuôi trồng để xóa' });
     }
+});
+
+router.use(async (error, req, res, next) => {
+    if (error instanceof multer.MulterError) {
+        await removeGrowthProgressUploadFiles(req.files || []);
+        const message = error.code === 'LIMIT_FILE_SIZE'
+            ? 'Mỗi ảnh đính kèm không được vượt quá 5 MB'
+            : 'Chỉ được đính kèm tối đa 5 ảnh cho mỗi lần cập nhật';
+        return res.status(400).json({ message });
+    }
+
+    if (error.message === 'Chỉ hỗ trợ ảnh JPEG, PNG hoặc WebP') {
+        await removeGrowthProgressUploadFiles(req.files || []);
+        return res.status(400).json({ message: error.message });
+    }
+
+    next(error);
 });
 
 module.exports = router;
