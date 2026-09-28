@@ -1,0 +1,24 @@
+FROM python:3.12-slim-bookworm
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    CLASSIFIER_HOST=0.0.0.0 \
+    CLASSIFIER_PORT=8001 \
+    CLASSIFIER_DEVICE=cpu
+WORKDIR /app
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends libgomp1 \
+    && rm -rf /var/lib/apt/lists/* \
+    && useradd --create-home --uid 10001 classifier
+
+COPY docker/requirements-classifier.txt ./docker/requirements-classifier.txt
+COPY helper/mushroom_classifier/requirements-common.txt ./helper/mushroom_classifier/requirements-common.txt
+RUN pip install --no-cache-dir --extra-index-url https://download.pytorch.org/whl/cpu \
+    -r docker/requirements-classifier.txt
+
+COPY --chown=classifier:classifier helper/mushroom_classifier/server.py helper/mushroom_classifier/inference.py \
+    helper/mushroom_classifier/labels.txt helper/mushroom_classifier/mushroom.json \
+    helper/mushroom_classifier/nammushroom_efficientnet_b0.pth ./helper/mushroom_classifier/
+USER classifier
+EXPOSE 8001
+CMD ["python", "helper/mushroom_classifier/server.py"]

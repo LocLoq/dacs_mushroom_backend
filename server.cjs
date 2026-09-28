@@ -2,7 +2,7 @@ const express = require('express');
 const cors = require('cors');
 const http = require('http');
 const { Server } = require('socket.io');
-const { loadEnvFile } = require('node:process');
+const { loadEnvironment } = require('./config/environment.cjs');
 const { PrismaClient } = require('@prisma/client');
 const { PrismaMariaDb } = require('@prisma/adapter-mariadb');
 const swaggerUi = require('swagger-ui-express');
@@ -10,7 +10,7 @@ const YAML = require('yamljs');
 const path = require('path');
 const { auditMiddleware } = require('./middlewares/audit');
 
-loadEnvFile();
+loadEnvironment();
 
 const adapter = new PrismaMariaDb({
   host: process.env.DATABASE_HOST,
@@ -24,10 +24,13 @@ const prisma = new PrismaClient({ adapter });
 
 const app = express();
 const port = process.env.PORT || 8080;
+const corsOrigins = (process.env.CORS_ALLOWED_ORIGINS || '').split(',').map((item) => item.trim()).filter(Boolean);
+const corsOrigin = corsOrigins.length ? corsOrigins : '*';
+const corsOptions = { origin: corsOrigin, allowedHeaders: ['Authorization', 'Content-Type'], exposedHeaders: ['Content-Disposition'] };
 
 const server = http.createServer(app);
 const io = new Server(server, {
-  cors: { origin: '*' }
+  cors: corsOptions
 });
 
 const allRoles = ['admin', 'manager', 'staff'];
@@ -38,7 +41,7 @@ global.prisma = prisma;
 global.allRoles = allRoles;
 global.privilegedRoles = privilegedRoles;
 
-app.use(cors());
+app.use(cors(corsOptions));
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
@@ -47,6 +50,7 @@ app.use('/api', auditMiddleware);
 // api
 app.use('/api', require('./routes/test'));
 app.use('/api', require('./routes/login'));
+app.use('/api/dashboard', require('./routes/dashboard'));
 app.use('/api/mushroom-classifier', require('./routes/mushroomClassifier'));
 app.use('/api/mushroom-species', require('./routes/mushroomSpeciesManagement'));
 app.use('/api/admin', require('./routes/admin'));

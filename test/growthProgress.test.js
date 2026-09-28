@@ -23,7 +23,7 @@ global.allRoles = ['admin', 'manager', 'staff'];
 global.privilegedRoles = ['admin', 'manager'];
 global.prisma = {
     user: {
-        findUnique: async () => ({ tokenver: 0 })
+        findUnique: async () => ({ id: 1, username: 'manager', tokenver: 0, role: { name: 'manager' } })
     },
     cultivationBatch: {
         findUnique: async ({ where }) => (state.batch && where.id === state.batch.id ? state.batch : null)
@@ -64,7 +64,7 @@ let server;
 let baseUrl;
 
 const managerToken = jwt.sign(
-    { username: 'manager', role: 'manager', tokenver: 0 },
+    { id: 1, username: 'manager', role: 'manager', tokenver: 0 },
     process.env.JWT_SECRET
 );
 async function request(path, options = {}) {

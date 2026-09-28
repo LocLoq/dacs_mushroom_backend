@@ -4,8 +4,8 @@ info:
   version: 1.0.0
   description: Tài liệu API cho Hệ thống Quản lý Nuôi trồng Nấm
 servers:
-  - url: http://localhost:8080
-    description: Máy chủ cục bộ (Local Server)
+  - url: /
+    description: Máy chủ đang phục vụ Swagger (tự dùng host và cổng hiện tại)
 components:
   securitySchemes:
     bearerAuth:
@@ -13,6 +13,51 @@ components:
       scheme: bearer
       bearerFormat: JWT
   schemas:
+    TaskCreateInput:
+      type: object
+      properties:
+        title:
+          type: string
+          maxLength: 255
+        description:
+          type: string
+          nullable: true
+        batchId:
+          type: integer
+          nullable: true
+        assigneeUserId:
+          type: integer
+          nullable: true
+        dueAt:
+          type: string
+          format: date-time
+          nullable: true
+        status:
+          type: string
+          enum: [TODO, IN_PROGRESS, COMPLETED, CANCELLED]
+      required: [title]
+    TaskUpdateInput:
+      type: object
+      properties:
+        title:
+          type: string
+          maxLength: 255
+        description:
+          type: string
+          nullable: true
+        batchId:
+          type: integer
+          nullable: true
+        assigneeUserId:
+          type: integer
+          nullable: true
+        dueAt:
+          type: string
+          format: date-time
+          nullable: true
+        status:
+          type: string
+          enum: [TODO, IN_PROGRESS, COMPLETED, CANCELLED]
     Mushroom:
       type: object
       properties:
@@ -316,7 +361,7 @@ paths:
           application/json:
             schema:
               type: object
-              required: [username, password, full_name, phone_number, email, role_id]
+              required: [username, password]
               properties:
                 username:
                   type: string
@@ -1229,3 +1274,72 @@ paths:
       responses:
         '201':
           description: Ghi nhận thu hoạch thành công
+
+  /api/auth/me:
+    get:
+      summary: Lấy người dùng và quyền hiện tại từ phiên đăng nhập
+      tags: [Xác thực]
+      responses:
+        '200':
+          description: Thông tin người dùng hiện tại
+        '401':
+          description: Token không hợp lệ, trả code AUTH_INVALID_TOKEN
+
+  /api/dashboard/tasks:
+    get:
+      summary: Danh sách công việc dashboard
+      tags: [Dashboard]
+      parameters:
+        - { name: page, in: query, schema: { type: integer, minimum: 1 } }
+        - { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 50 } }
+        - { name: search, in: query, schema: { type: string } }
+        - { name: batchId, in: query, schema: { type: integer } }
+        - { name: assigneeUserId, in: query, schema: { type: integer } }
+        - { name: status, in: query, schema: { type: string, enum: [TODO, IN_PROGRESS, COMPLETED, CANCELLED, ALL] } }
+      responses:
+        '200': { description: Danh sách phân trang; mặc định chỉ việc đang mở }
+    post:
+      summary: Tạo công việc (admin hoặc manager)
+      tags: [Dashboard]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TaskCreateInput'
+      responses:
+        '201': { description: Tạo công việc thành công }
+
+  /api/dashboard/tasks/{id}:
+    get:
+      summary: Chi tiết công việc
+      tags: [Dashboard]
+      parameters: [ { name: id, in: path, required: true, schema: { type: string, format: uuid } } ]
+      responses:
+        '200': { description: Chi tiết công việc }
+        '404': { description: Không tìm thấy công việc }
+    patch:
+      summary: Cập nhật công việc; staff chỉ đổi trạng thái việc được giao
+      tags: [Dashboard]
+      parameters: [ { name: id, in: path, required: true, schema: { type: string, format: uuid } } ]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TaskUpdateInput'
+      responses:
+        '200': { description: Cập nhật công việc thành công }
+    delete:
+      summary: Xóa công việc (admin hoặc manager)
+      tags: [Dashboard]
+      parameters: [ { name: id, in: path, required: true, schema: { type: string, format: uuid } } ]
+      responses:
+        '200': { description: Xóa công việc thành công }
+
+  /api/dashboard/task-assignees:
+    get:
+      summary: Danh sách người có thể được giao việc
+      tags: [Dashboard]
+      responses:
+        '200': { description: Danh sách người dùng phân trang }

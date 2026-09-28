@@ -6,7 +6,7 @@ const jwt = require('jsonwebtoken');
 process.env.JWT_SECRET = 'report-history-secret'; global.privilegedRoles = ['admin', 'manager']; global.allRoles = ['admin', 'manager', 'staff'];
 const lookup = { id: '11111111-1111-4111-8111-111111111111', status: 'SUCCEEDED', originalName: 'demo.jpg', predictedName: 'Nấm sò', edibility: 'NON_POISONOUS', confidence: 0.9, createdAt: new Date(), user: { id: 1, username: 'manager', full_name: 'Manager' } };
 global.prisma = {
-  user: { findUnique: async () => ({ tokenver: 0 }) },
+  user: { findUnique: async () => ({ id: 1, username: 'manager', tokenver: 0, role: { name: 'manager' } }) },
   productionFacility: { count: async () => 5 }, mushroom: { count: async () => 6 },
   cultivationBatch: { count: async () => 100, groupBy: async () => [], findMany: async () => [{ batchCode: 'DEMO-001', status: 'FRUITING', startDate: new Date(), expectedHarvestDate: null, endDate: null, defectRate: 2, facility: { name: 'Trại demo', province: 'Lâm Đồng' }, mushroom: { commonName: 'Nấm sò', scientificName: 'Demo' }, harvestRecords: [{ totalYieldKg: 12 }], growthRecords: [] }] },
   harvestRecord: { aggregate: async () => ({ _sum: { totalYieldKg: 12 } }), findMany: async () => [{ harvestedAt: new Date(), totalYieldKg: 12 }] },

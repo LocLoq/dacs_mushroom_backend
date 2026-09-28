@@ -1,9 +1,9 @@
-import { loadEnvFile } from 'process';
-loadEnvFile();
+import environment from './config/environment.cjs';
+environment.loadEnvironment();
 
 export default {
   datasource: {
-    url: process.env.DATABASE_URL,
+    url: environment.getDatabaseUrl(),
   },
 };
 

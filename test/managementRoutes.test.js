@@ -9,7 +9,7 @@ global.privilegedRoles = ['admin', 'manager'];
 const admin = { id: 1, username: 'admin', password_hash: 'password', full_name: 'Admin', phone_number: '0900', email: 'admin@example.test', role_id: 1, tokenver: 0, role: { name: 'admin' } };
 global.prisma = {
     user: {
-        findUnique: async ({ where }) => where.username === 'new-user' ? null : { ...admin, username: where.username || admin.username },
+        findUnique: async ({ where }) => where.username === 'new-user' ? null : { ...admin, id: where.id || admin.id, username: where.username || admin.username },
         count: async () => 1, findMany: async () => [admin], create: async ({ data }) => ({ id: 2, ...data }), update: async ({ data }) => ({ id: 1, ...data }), delete: async () => admin
     },
     role: { findMany: async () => [{ id: 1, name: 'admin' }] },

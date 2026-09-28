@@ -27,6 +27,8 @@ model User {
   role              Role               @relation(fields: [role_id], references: [id], onDelete: Cascade)
   classifierLookups ClassifierLookup[]
   auditLogs         AuditLog[]
+  createdTasks      Task[] @relation("TaskCreator")
+  assignedTasks     Task[] @relation("TaskAssignee")
 
   @@map("users")
 }
@@ -83,6 +85,13 @@ enum ClassifierLookupStatus {
 enum AuditOutcome {
   SUCCESS
   FAILURE
+}
+
+enum TaskStatus {
+  TODO
+  IN_PROGRESS
+  COMPLETED
+  CANCELLED
 }
 
 // ------------------------------------------------------
@@ -188,12 +197,35 @@ model CultivationBatch {
   careLogs       CultivationCareLog[]
   growthRecords  GrowthProgressRecord[]
   harvestRecords HarvestRecord[]
+  tasks          Task[]
 
   @@index([startDate])
   @@index([facilityId, startDate])
   @@index([mushroomId, startDate])
   @@index([status, startDate])
   @@map("cultivation_batches")
+}
+
+model Task {
+  id             String     @id @default(uuid()) @db.VarChar(36)
+  title          String     @db.VarChar(255)
+  description    String?    @db.Text
+  status         TaskStatus @default(TODO)
+  batchId        Int?       @map("batch_id")
+  assigneeUserId Int?       @map("assignee_user_id")
+  createdByUserId Int?      @map("created_by_user_id")
+  dueAt          DateTime?  @map("due_at")
+  createdAt      DateTime   @default(now()) @map("created_at")
+  updatedAt      DateTime   @updatedAt @map("updated_at")
+
+  batch      CultivationBatch? @relation(fields: [batchId], references: [id], onDelete: SetNull)
+  assignee   User? @relation("TaskAssignee", fields: [assigneeUserId], references: [id], onDelete: SetNull)
+  createdBy  User? @relation("TaskCreator", fields: [createdByUserId], references: [id], onDelete: SetNull)
+
+  @@index([status, dueAt])
+  @@index([assigneeUserId, status])
+  @@index([batchId])
+  @@map("tasks")
 }
 
 model CultivationCareLog {

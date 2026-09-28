@@ -79,6 +79,8 @@ router.get('/users', authenticateToken, authorizeRoles(...onlyAdmin), async (req
                 id: true,
                 username: true,
                 full_name: true,
+                phone_number: true,
+                email: true,
                 role_id: true,
                 tokenver: true,
                 role: {
@@ -166,14 +168,13 @@ router.put('/users/:id', authenticateToken, authorizeRoles(...onlyAdmin), async 
         
         if (password) {
             updateData.password_hash = await bcrypt.hash(password, 10);
-            // Có thể tự động tăng tokenver nếu muốn user bị bắt đăng nhập lại khi đổi mật khẩu
-            updateData.tokenver = { increment: 1 };
         }
+        if (password || role_id) updateData.tokenver = { increment: 1 };
 
         const updatedUser = await prisma.user.update({
             where: { id },
             data: updateData,
-            select: { id: true, username: true, full_name: true, role_id: true }
+            select: { id: true, username: true, full_name: true, phone_number: true, email: true, role_id: true }
         });
 
         res.json({ message: 'Cập nhật tài khoản thành công', data: updatedUser });

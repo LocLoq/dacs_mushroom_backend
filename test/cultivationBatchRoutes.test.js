@@ -7,7 +7,7 @@ process.env.JWT_SECRET = 'batch-routes-secret';
 global.allRoles = ['admin', 'manager', 'staff']; global.privilegedRoles = ['admin', 'manager'];
 const batch = { id: 1, batchCode: 'DEMO-BATCH-001', status: 'FRUITING', facility: { id: 1, name: 'Trại demo' }, mushroom: { id: 1, commonName: 'Nấm sò' } };
 global.prisma = {
-    user: { findUnique: async () => ({ tokenver: 0 }) },
+    user: { findUnique: async () => ({ id: 1, username: 'manager', tokenver: 0, role: { name: 'manager' } }) },
     cultivationBatch: { count: async () => 1, findMany: async () => [batch], findUnique: async () => batch, create: async ({ data }) => ({ ...batch, ...data }), update: async ({ data }) => ({ ...batch, ...data }), delete: async () => batch },
     cultivationCareLog: { findMany: async () => [{ id: 1, batchId: 1 }], create: async ({ data }) => ({ id: 2, ...data }) },
     harvestRecord: { findMany: async () => [{ id: 1, totalYieldKg: 10 }], create: async ({ data }) => ({ id: 2, ...data }) },
@@ -31,4 +31,17 @@ test('cultivation batch, care-log and harvest endpoints have happy paths', async
     response = await request('/1/harvests', { method: 'POST', body: JSON.stringify({ totalYieldKg: 12.5, qualityGrade: 'A', finalizeBatch: true }) }); assert.equal(response.status, 201);
     response = await request('/1', { method: 'PUT', body: JSON.stringify({ status: 'HARVESTING' }) }); assert.equal(response.status, 200);
     response = await request('/1', { method: 'DELETE' }); assert.equal(response.status, 200);
+});
+
+test('batch and harvest routes reject malformed numeric values and dates', async () => {
+    let response = await request('/', { method: 'POST', body: JSON.stringify({ batchCode: 'INVALID-BATCH', facilityId: 1, mushroomId: 1, startDate: 'not-a-date', bagQuantity: 1 }) });
+    assert.equal(response.status, 400);
+    response = await request('/1', { method: 'PUT', body: JSON.stringify({ bagQuantity: -1 }) });
+    assert.equal(response.status, 400);
+    response = await request('/1', { method: 'PUT', body: JSON.stringify({ defectRate: '12kg' }) });
+    assert.equal(response.status, 400);
+    response = await request('/1/harvests', { method: 'POST', body: JSON.stringify({ totalYieldKg: '12kg' }) });
+    assert.equal(response.status, 400);
+    response = await request('/1/harvests', { method: 'POST', body: JSON.stringify({ totalYieldKg: 1, harvestedAt: 'not-a-date' }) });
+    assert.equal(response.status, 400);
 });

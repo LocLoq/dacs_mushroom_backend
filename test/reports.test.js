@@ -7,7 +7,7 @@ process.env.JWT_SECRET = 'reports-test-secret';
 global.allRoles = ['admin', 'manager', 'staff'];
 global.privilegedRoles = ['admin', 'manager'];
 global.prisma = {
-    user: { findUnique: async () => ({ tokenver: 0 }) },
+    user: { findUnique: async () => ({ id: 1, username: 'manager', tokenver: 0, role: { name: 'manager' } }) },
     cultivationBatch: {
         findMany: async () => [{
             batchCode: 'LO-001', status: 'FRUITING', startDate: new Date('2026-01-01'), expectedHarvestDate: null, endDate: null, defectRate: 2,

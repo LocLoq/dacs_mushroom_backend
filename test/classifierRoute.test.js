@@ -15,7 +15,7 @@ global.prisma = {
         findMany: async () => [],
         findUnique: async () => null
     },
-    user: { findUnique: async () => ({ tokenver: 0 }) }
+    user: { findUnique: async () => ({ id: 1, username: 'user', tokenver: 0, role: { name: 'staff' } }) }
 };
 
 const queue = require('../queues/mushroomClassifierQueue');

@@ -2,6 +2,7 @@ const express = require('express');
 const jwt = require('jsonwebtoken');
 const bcrypt = require('bcrypt');
 const { auditAction } = require('../middlewares/audit');
+const { authenticateToken } = require('../middlewares/auth');
 
 
 const router = express.Router();
@@ -52,6 +53,25 @@ router.post('/login', auditAction('LOGIN', {
   } catch (error) {
     console.error('Login error:', error);
     res.status(500).json({ message: 'Internal server error' });
+  }
+});
+
+router.get('/auth/me', authenticateToken, async (req, res) => {
+  try {
+    const user = await prisma.user.findUnique({
+      where: { id: req.user.id },
+      select: {
+        id: true, username: true, full_name: true, email: true, phone_number: true,
+        role: { select: { name: true } }
+      }
+    });
+    if (!user || !user.role || !global.allRoles.includes(user.role.name)) {
+      return res.status(401).json({ code: 'AUTH_INVALID_TOKEN', message: 'Phiên đăng nhập đã hết hạn hoặc không hợp lệ' });
+    }
+    res.json({ data: { id: user.id, username: user.username, full_name: user.full_name, role: user.role.name, email: user.email, phone_number: user.phone_number } });
+  } catch (error) {
+    console.error('Auth me error:', error);
+    res.status(500).json({ message: 'Lỗi máy chủ' });
   }
 });
 

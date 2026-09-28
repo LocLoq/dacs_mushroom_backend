@@ -8,6 +8,35 @@ const router = express.Router();
 const { authenticateToken, authorizeRoles } = require('../middlewares/auth');
 const prisma = global.prisma;
 
+const validDate = (value) => {
+    if (typeof value !== 'string' || !value.trim()) return null;
+    const date = new Date(value);
+    return Number.isNaN(date.getTime()) ? null : date;
+};
+const finiteNumber = (value) => {
+    if (typeof value === 'number') return Number.isFinite(value) ? value : null;
+    if (typeof value === 'string' && value.trim() && /^[-+]?(?:\d+\.?\d*|\.\d+)$/.test(value.trim())) { const parsed = Number(value); return Number.isFinite(parsed) ? parsed : null; }
+    return null;
+};
+const validateBatchData = (data) => {
+    for (const field of ['startDate', 'expectedHarvestDate', 'endDate']) if (data[field] !== undefined && data[field] !== null) {
+        const parsed = validDate(data[field]);
+        if (!parsed) return `${field} không hợp lệ`;
+        data[field] = parsed;
+    }
+    if (data.bagQuantity !== undefined && data.bagQuantity !== null) {
+        const value = finiteNumber(data.bagQuantity);
+        if (value === null || !Number.isInteger(value) || value < 0) return 'bagQuantity phải là số nguyên không âm';
+        data.bagQuantity = value;
+    }
+    if (data.defectRate !== undefined && data.defectRate !== null) {
+        const value = finiteNumber(data.defectRate);
+        if (value === null || value < 0 || value > 100) return 'defectRate phải nằm trong khoảng 0 đến 100';
+        data.defectRate = value;
+    }
+    return null;
+};
+
 const growthProgressUploadDirectory = path.join(__dirname, '..', 'uploads', 'growth-progress');
 const growthProgressImageExtensions = {
     'image/jpeg': '.jpg',
@@ -133,11 +162,8 @@ router.get('/:id', authenticateToken, authorizeRoles(...global.allRoles), async 
 router.post('/', authenticateToken, authorizeRoles(...global.privilegedRoles), async (req, res) => {
     try {
         const batchData = req.body;
-        
-        // Chuyển đổi định dạng ngày sang kiểu Date của JS nếu FE truyền lên string ISO
-        if (batchData.startDate) batchData.startDate = new Date(batchData.startDate);
-        if (batchData.expectedHarvestDate) batchData.expectedHarvestDate = new Date(batchData.expectedHarvestDate);
-        if (batchData.endDate) batchData.endDate = new Date(batchData.endDate);
+        const validationError = validateBatchData(batchData);
+        if (validationError) return res.status(400).json({ message: validationError });
 
         const newBatch = await prisma.cultivationBatch.create({
             data: batchData,
@@ -176,9 +202,11 @@ router.post('/:id/care-logs', authenticateToken, authorizeRoles(...global.allRol
         const batchId = parseInt(req.params.id);
         const { actionType, notes, recordedAt } = req.body;
 
-        if (!actionType || !notes) {
+        if (typeof actionType !== 'string' || !actionType.trim() || typeof notes !== 'string' || !notes.trim()) {
             return res.status(400).json({ message: 'Thiếu thông tin actionType hoặc notes' });
         }
+        const parsedRecordedAt = recordedAt === undefined ? new Date() : validDate(recordedAt);
+        if (!parsedRecordedAt) return res.status(400).json({ message: 'Thời điểm ghi nhận không hợp lệ' });
 
         const batch = await prisma.cultivationBatch.findUnique({ where: { id: batchId } });
         if (!batch) return res.status(404).json({ message: 'Không tìm thấy lô nuôi trồng' });
@@ -186,9 +214,9 @@ router.post('/:id/care-logs', authenticateToken, authorizeRoles(...global.allRol
         const careLog = await prisma.cultivationCareLog.create({
             data: {
                 batchId,
-                actionType,
-                notes,
-                recordedAt: recordedAt ? new Date(recordedAt) : new Date()
+                actionType: actionType.trim(),
+                notes: notes.trim(),
+                recordedAt: parsedRecordedAt
             }
         });
 
@@ -392,9 +420,13 @@ router.post('/:id/harvests', authenticateToken, authorizeRoles(...global.allRole
         const batchId = parseInt(req.params.id);
         const { totalYieldKg, qualityGrade, notes, harvestedAt, finalizeBatch } = req.body;
 
-        if (totalYieldKg === undefined || totalYieldKg === null) {
+        const parsedYield = finiteNumber(totalYieldKg);
+        if (parsedYield === null || parsedYield < 0) {
             return res.status(400).json({ message: 'Thiếu thông tin totalYieldKg' });
         }
+        if (finalizeBatch !== undefined && typeof finalizeBatch !== 'boolean') return res.status(400).json({ message: 'finalizeBatch phải là boolean' });
+        const parsedHarvestedAt = harvestedAt === undefined ? new Date() : validDate(harvestedAt);
+        if (!parsedHarvestedAt) return res.status(400).json({ message: 'Thời điểm thu hoạch không hợp lệ' });
 
         const batch = await prisma.cultivationBatch.findUnique({ where: { id: batchId } });
         if (!batch) return res.status(404).json({ message: 'Không tìm thấy lô nuôi trồng' });
@@ -403,10 +435,10 @@ router.post('/:id/harvests', authenticateToken, authorizeRoles(...global.allRole
             const created = await tx.harvestRecord.create({
                 data: {
                     batchId,
-                    totalYieldKg: parseFloat(totalYieldKg),
+                    totalYieldKg: parsedYield,
                     qualityGrade: qualityGrade || null,
                     notes: notes || null,
-                    harvestedAt: harvestedAt ? new Date(harvestedAt) : new Date()
+                    harvestedAt: parsedHarvestedAt
                 }
             });
 
@@ -415,7 +447,7 @@ router.post('/:id/harvests', authenticateToken, authorizeRoles(...global.allRole
                     where: { id: batchId },
                     data: {
                         status: 'COMPLETED',
-                        actualYieldKg: parseFloat(totalYieldKg),
+                        actualYieldKg: parsedYield,
                         endDate: new Date()
                     }
                 });
@@ -436,10 +468,8 @@ router.put('/:id', authenticateToken, authorizeRoles(...global.allRoles), async 
     try {
         const id = parseInt(req.params.id);
         const batchData = req.body;
-
-        if (batchData.startDate) batchData.startDate = new Date(batchData.startDate);
-        if (batchData.expectedHarvestDate) batchData.expectedHarvestDate = new Date(batchData.expectedHarvestDate);
-        if (batchData.endDate) batchData.endDate = new Date(batchData.endDate);
+        const validationError = validateBatchData(batchData);
+        if (validationError) return res.status(400).json({ message: validationError });
 
         const updatedBatch = await prisma.cultivationBatch.update({
             where: { id },

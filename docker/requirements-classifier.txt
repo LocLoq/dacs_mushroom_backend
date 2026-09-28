@@ -1,0 +1,4 @@
+# CPU wheels let the default stack run without an NVIDIA GPU or CUDA runtime.
+torch==2.10.0+cpu
+torchvision==0.25.0+cpu
+-r ../helper/mushroom_classifier/requirements-common.txt

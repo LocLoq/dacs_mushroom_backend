@@ -1,0 +1,36 @@
+FROM node:24-bookworm-slim AS runtime
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends openssl ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+WORKDIR /app
+
+COPY package.json package-lock.json ./
+COPY prisma/schema.prisma ./prisma/schema.prisma
+COPY prisma.config.ts ./
+COPY config ./config
+RUN npm ci --omit=dev --ignore-scripts \
+    && DATABASE_URL=mysql://build:build@localhost:3306/build npx prisma generate \
+    && npm cache clean --force
+
+COPY --chown=node:node server.cjs swagger.yaml ./
+COPY --chown=node:node routes ./routes
+COPY --chown=node:node middlewares ./middlewares
+COPY --chown=node:node services ./services
+COPY --chown=node:node queues ./queues
+COPY --chown=node:node jobs ./jobs
+COPY --chown=node:node prisma ./prisma
+COPY --chown=node:node sql ./sql
+RUN mkdir -p uploads/growth-progress uploads/classifier \
+    && chown -R node:node uploads
+
+ENV NODE_ENV=production PORT=8080
+USER node
+EXPOSE 8080
+CMD ["node", "server.cjs"]
+
+FROM runtime AS test
+COPY --chown=node:node test ./test
+CMD ["npm", "test"]
+
+FROM runtime AS production

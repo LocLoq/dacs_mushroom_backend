@@ -26,8 +26,11 @@ async function main() {
   for (const [role, username] of [['admin', 'demo_admin'], ['manager', 'demo_manager'], ['staff', 'demo_staff']]) {
     users[role] = await prisma.user.upsert({ where: { username }, update: { full_name: `Demo ${role}`, phone_number: `09000000${roleRows[role].id}`, email: `${username}@example.test`, role_id: roleRows[role].id, password_hash, tokenver: 1 }, create: { username, full_name: `Demo ${role}`, phone_number: `09000000${roleRows[role].id}`, email: `${username}@example.test`, role_id: roleRows[role].id, password_hash, tokenver: 1 } });
   }
+  // Chỉ seed giống dùng cho nuôi trồng và ăn được; không tạo hoặc nuôi nấm độc.
   const mushroomData = [
-    ['DEMO-Pleurotus-ostreatus', 'Nấm sò', 'EDIBLE', 'EASY'], ['DEMO-Lentinula-edodes', 'Nấm hương', 'EDIBLE', 'MEDIUM'], ['DEMO-Hericium-erinaceus', 'Nấm hầu thủ', 'CHOICE', 'MEDIUM'], ['DEMO-Amanita-phalloides', 'Nấm tán độc', 'DEADLY', 'UNCULTIVABLE'], ['DEMO-Inocybe-erubescens', 'Nấm xơ', 'POISONOUS', 'HARD'], ['DEMO-Russula-emetic', 'Nấm giòn', 'INEDIBLE', 'MEDIUM']
+    ['DEMO-Pleurotus-ostreatus', 'Nấm sò', 'EDIBLE', 'EASY'],
+    ['DEMO-Lentinula-edodes', 'Nấm hương', 'EDIBLE', 'MEDIUM'],
+    ['DEMO-Hericium-erinaceus', 'Nấm hầu thủ', 'CHOICE', 'MEDIUM']
   ];
   const mushrooms = [];
   for (const [scientificName, commonName, edibilityStatus, cultivationDifficulty] of mushroomData) mushrooms.push(await prisma.mushroom.upsert({ where: { scientificName }, update: { commonName, edibilityStatus, cultivationDifficulty }, create: { scientificName, commonName, family: 'DEMO-Family', genus: scientificName.split('-')[1], edibilityStatus, cultivationDifficulty, ecologyType: 'SAPROBIC', habitat: 'Dữ liệu demo', fruitingSeason: 'Quanh năm' } }));
@@ -41,6 +44,18 @@ async function main() {
     const expectedHarvestDate = new Date(startDate.getTime() + 45 * 86400000);
     const facility = facilities[batchIndex % facilities.length], mushroom = mushrooms[batchIndex % mushrooms.length];
     batchRows.push(await prisma.cultivationBatch.upsert({ where: { batchCode }, update: { facilityId: facility.id, mushroomId: mushroom.id, status, startDate, expectedHarvestDate, endDate: status === 'COMPLETED' || status === 'FAILED' ? minusDays(Math.max(1, 20 - batchIndex % 15)) : null, defectRate: batchIndex % 7 === 0 ? null : Number(((batchIndex % 15) * 1.3).toFixed(2)), notes: 'Dữ liệu demo' }, create: { batchCode, facilityId: facility.id, mushroomId: mushroom.id, status, substrateType: 'Mùn cưa', spawnSource: 'DEMO-SPAWN', bagQuantity: 1000 + batchIndex * 5, startDate, expectedHarvestDate, defectRate: batchIndex % 7 === 0 ? null : Number(((batchIndex % 15) * 1.3).toFixed(2)), notes: 'Dữ liệu demo' } }));
+  }
+  // Dọn dữ liệu độc từ các lần seed trước sau khi toàn bộ lô DEMO đã được gán lại.
+  const toxicDemoMushrooms = await prisma.mushroom.findMany({
+    where: { scientificName: { in: ['DEMO-Amanita-phalloides', 'DEMO-Inocybe-erubescens'] } },
+    select: { id: true }
+  });
+  if (toxicDemoMushrooms.length) {
+    // Các cơ sở DEMO đã được `set` lại liên kết ở trên. Không xóa nếu DB có lô ngoài
+    // dữ liệu demo còn tham chiếu giống này.
+    await prisma.mushroom.deleteMany({
+      where: { id: { in: toxicDemoMushrooms.map(({ id }) => id) }, cultivationBatches: { none: {} } }
+    });
   }
   const demoBatchIds = batchRows.map(({ id }) => id);
   await prisma.growthProgressImage.deleteMany({ where: { growthProgress: { batchId: { in: demoBatchIds } } } });

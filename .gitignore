@@ -1,4 +1,6 @@
 .env
+.env.docker
+backups/
 
 /generated/prisma
 node_modules
