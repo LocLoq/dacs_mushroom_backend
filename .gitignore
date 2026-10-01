@@ -6,4 +6,5 @@ backups/
 node_modules
 __pycache__/
 *.pyc
-uploads/growth-progress/demo-*.png
+uploads/
+benchmarks/results/
