@@ -13,6 +13,588 @@ components:
       scheme: bearer
       bearerFormat: JWT
   schemas:
+    Pagination:
+      type: "object"
+      properties:
+        totalItems:
+          type: "integer"
+        currentPage:
+          type: "integer"
+          minimum: 1
+        totalPages:
+          type: "integer"
+        pageSize:
+          type: "integer"
+          minimum: 1
+    TaskSubmissionSummary:
+      type: "object"
+      properties:
+        id:
+          type: "string"
+          format: "uuid"
+        status:
+          type: "string"
+          enum: ["PENDING","APPROVED","REJECTED","CANCELLED"]
+        submittedByUserId:
+          type: "integer"
+          nullable: true
+          readOnly: true
+        reviewedByUserId:
+          type: "integer"
+          nullable: true
+          readOnly: true
+        submittedAt:
+          type: "string"
+          format: "date-time"
+        reviewedAt:
+          type: "string"
+          format: "date-time"
+          nullable: true
+        reason:
+          type: "string"
+          nullable: true
+    TaskSubmission:
+      type: "object"
+      properties:
+        id:
+          type: "string"
+          format: "uuid"
+        status:
+          type: "string"
+          enum: ["PENDING","APPROVED","REJECTED","CANCELLED"]
+        submittedByUserId:
+          type: "integer"
+          nullable: true
+          readOnly: true
+        reviewedByUserId:
+          type: "integer"
+          nullable: true
+          readOnly: true
+        submittedAt:
+          type: "string"
+          format: "date-time"
+        reviewedAt:
+          type: "string"
+          format: "date-time"
+          nullable: true
+        reason:
+          type: "string"
+          nullable: true
+        taskId:
+          type: "string"
+          format: "uuid"
+        notes:
+          type: "string"
+          nullable: true
+        evidence:
+          type: "array"
+          items:
+            type: "object"
+            properties:
+              type:
+                type: "string"
+                enum: ["CARE_LOG","GROWTH_PROGRESS","HARVEST"]
+              recordId:
+                type: "integer"
+                minimum: 1
+              record:
+                oneOf: [{"$ref":"#/components/schemas/CultivationCareLog"},{"$ref":"#/components/schemas/GrowthProgressRecord"},{"$ref":"#/components/schemas/HarvestRecord"}]
+    Task:
+      type: "object"
+      properties:
+        id:
+          type: "string"
+          format: "uuid"
+        title:
+          type: "string"
+        description:
+          type: "string"
+          nullable: true
+        status:
+          type: "string"
+          enum: ["TODO","IN_PROGRESS","PENDING_REVIEW","COMPLETED","CANCELLED"]
+        batchId:
+          type: "integer"
+          nullable: true
+        batchCode:
+          type: "string"
+          nullable: true
+        assigneeUserId:
+          type: "integer"
+          nullable: true
+          readOnly: true
+        assignee:
+          type: "object"
+          nullable: true
+          properties:
+            id:
+              type: "integer"
+              minimum: 1
+            username:
+              type: "string"
+            full_name:
+              type: "string"
+            role:
+              type: "string"
+              enum: ["admin","manager","staff"]
+        createdByUserId:
+          type: "integer"
+          nullable: true
+          readOnly: true
+        dueAt:
+          type: "string"
+          format: "date-time"
+          nullable: true
+        createdAt:
+          type: "string"
+          format: "date-time"
+        updatedAt:
+          type: "string"
+          format: "date-time"
+        version:
+          type: "integer"
+          readOnly: true
+        submissions:
+          type: "array"
+          items:
+            $ref: "#/components/schemas/TaskSubmissionSummary"
+          description: "List/create/patch: tối đa một lần gửi gần nhất, không có evidence/notes."
+    TaskDetail:
+      type: "object"
+      properties:
+        id:
+          type: "string"
+          format: "uuid"
+        title:
+          type: "string"
+        description:
+          type: "string"
+          nullable: true
+        status:
+          type: "string"
+          enum: ["TODO","IN_PROGRESS","PENDING_REVIEW","COMPLETED","CANCELLED"]
+        batchId:
+          type: "integer"
+          nullable: true
+        batchCode:
+          type: "string"
+          nullable: true
+        assigneeUserId:
+          type: "integer"
+          nullable: true
+          readOnly: true
+        assignee:
+          type: "object"
+          nullable: true
+          properties:
+            id:
+              type: "integer"
+              minimum: 1
+            username:
+              type: "string"
+            full_name:
+              type: "string"
+            role:
+              type: "string"
+              enum: ["admin","manager","staff"]
+        createdByUserId:
+          type: "integer"
+          nullable: true
+          readOnly: true
+        dueAt:
+          type: "string"
+          format: "date-time"
+          nullable: true
+        createdAt:
+          type: "string"
+          format: "date-time"
+        updatedAt:
+          type: "string"
+          format: "date-time"
+        version:
+          type: "integer"
+          readOnly: true
+        submissions:
+          type: "array"
+          items:
+            $ref: "#/components/schemas/TaskSubmission"
+          description: "Toàn bộ lịch sử với snapshot minh chứng."
+    TaskSubmissionInput:
+      type: "object"
+      additionalProperties: false
+      required: ["evidence"]
+      properties:
+        evidence:
+          type: "array"
+          minItems: 1
+          maxItems: 20
+          items:
+            type: "object"
+            additionalProperties: false
+            required: ["type","recordId"]
+            properties:
+              type:
+                type: "string"
+                enum: ["CARE_LOG","GROWTH_PROGRESS","HARVEST"]
+              recordId:
+                type: "integer"
+                minimum: 1
+        notes:
+          type: "string"
+          nullable: true
+          maxLength: 10000
+    TaskReviewInput:
+      type: "object"
+      additionalProperties: false
+      required: ["decision"]
+      properties:
+        decision:
+          type: "string"
+          enum: ["APPROVE","REJECT"]
+        reason:
+          type: "string"
+          nullable: true
+          maxLength: 10000
+          description: "Bắt buộc khi REJECT."
+    EvidenceCandidate:
+      type: "object"
+      properties:
+        type:
+          type: "string"
+          enum: ["CARE_LOG","GROWTH_PROGRESS","HARVEST"]
+        recordId:
+          type: "integer"
+          minimum: 1
+        record:
+          oneOf: [{"$ref":"#/components/schemas/CultivationCareLog"},{"$ref":"#/components/schemas/GrowthProgressRecord"},{"$ref":"#/components/schemas/HarvestRecord"}]
+    ExpenseInput:
+      type: "object"
+      additionalProperties: false
+      required: ["name","category","quantity","unit","unitPrice"]
+      properties:
+        name:
+          type: "string"
+          maxLength: 255
+        category:
+          type: "string"
+          enum: ["MATERIAL","TOOL","FERTILIZER","OTHER"]
+        quantity:
+          oneOf: [{"type":"string","pattern":"^\\d+(\\.\\d+)?$"},{"type":"number","minimum":0}]
+          description: "Đơn giá tối đa 2 chữ số thập phân; số lượng dương, tối đa 3 chữ số thập phân."
+        unit:
+          type: "string"
+          maxLength: 50
+        unitPrice:
+          oneOf: [{"type":"string","pattern":"^\\d+(\\.\\d+)?$"},{"type":"number","minimum":0}]
+          description: "Đơn giá tối đa 2 chữ số thập phân; số lượng dương, tối đa 3 chữ số thập phân."
+        incurredAt:
+          type: "string"
+          format: "date-time"
+          description: "Mặc định hiện tại khi tạo; cũng chấp nhận YYYY-MM-DD."
+        notes:
+          type: "string"
+          nullable: true
+          maxLength: 10000
+    ExpenseUpdateInput:
+      type: "object"
+      additionalProperties: false
+      properties:
+        name:
+          type: "string"
+          maxLength: 255
+        category:
+          type: "string"
+          enum: ["MATERIAL","TOOL","FERTILIZER","OTHER"]
+        quantity:
+          oneOf: [{"type":"string","pattern":"^\\d+(\\.\\d+)?$"},{"type":"number","minimum":0}]
+          description: "Đơn giá tối đa 2 chữ số thập phân; số lượng dương, tối đa 3 chữ số thập phân."
+        unit:
+          type: "string"
+          maxLength: 50
+        unitPrice:
+          oneOf: [{"type":"string","pattern":"^\\d+(\\.\\d+)?$"},{"type":"number","minimum":0}]
+          description: "Đơn giá tối đa 2 chữ số thập phân; số lượng dương, tối đa 3 chữ số thập phân."
+        incurredAt:
+          type: "string"
+          format: "date-time"
+          description: "Mặc định hiện tại khi tạo; cũng chấp nhận YYYY-MM-DD."
+        notes:
+          type: "string"
+          nullable: true
+          maxLength: 10000
+    SaleInput:
+      type: "object"
+      additionalProperties: false
+      required: ["quantityKg","unitPrice"]
+      properties:
+        quantityKg:
+          oneOf: [{"type":"string","pattern":"^\\d+(\\.\\d+)?$"},{"type":"number","minimum":0}]
+          description: "Đơn giá tối đa 2 chữ số thập phân; số lượng dương, tối đa 3 chữ số thập phân."
+        unitPrice:
+          oneOf: [{"type":"string","pattern":"^\\d+(\\.\\d+)?$"},{"type":"number","minimum":0}]
+          description: "Đơn giá tối đa 2 chữ số thập phân; số lượng dương, tối đa 3 chữ số thập phân."
+        soldAt:
+          type: "string"
+          format: "date-time"
+          description: "Mặc định hiện tại khi tạo; cũng chấp nhận YYYY-MM-DD."
+        buyer:
+          type: "string"
+          nullable: true
+          maxLength: 255
+        notes:
+          type: "string"
+          nullable: true
+          maxLength: 10000
+    SaleUpdateInput:
+      type: "object"
+      additionalProperties: false
+      properties:
+        quantityKg:
+          oneOf: [{"type":"string","pattern":"^\\d+(\\.\\d+)?$"},{"type":"number","minimum":0}]
+          description: "Đơn giá tối đa 2 chữ số thập phân; số lượng dương, tối đa 3 chữ số thập phân."
+        unitPrice:
+          oneOf: [{"type":"string","pattern":"^\\d+(\\.\\d+)?$"},{"type":"number","minimum":0}]
+          description: "Đơn giá tối đa 2 chữ số thập phân; số lượng dương, tối đa 3 chữ số thập phân."
+        soldAt:
+          type: "string"
+          format: "date-time"
+          description: "Mặc định hiện tại khi tạo; cũng chấp nhận YYYY-MM-DD."
+        buyer:
+          type: "string"
+          nullable: true
+          maxLength: 255
+        notes:
+          type: "string"
+          nullable: true
+          maxLength: 10000
+    BatchExpense:
+      type: "object"
+      properties:
+        name:
+          type: "string"
+          maxLength: 255
+        category:
+          type: "string"
+          enum: ["MATERIAL","TOOL","FERTILIZER","OTHER"]
+        quantity:
+          type: "string"
+        unit:
+          type: "string"
+          maxLength: 50
+        unitPrice:
+          type: "string"
+        incurredAt:
+          type: "string"
+          format: "date-time"
+          description: "Mặc định hiện tại khi tạo; cũng chấp nhận YYYY-MM-DD."
+        notes:
+          type: "string"
+          nullable: true
+          maxLength: 10000
+        id:
+          type: "integer"
+          minimum: 1
+        batchId:
+          type: "integer"
+          minimum: 1
+        amount:
+          type: "string"
+          readOnly: true
+        createdByUserId:
+          type: "integer"
+          nullable: true
+          readOnly: true
+        updatedByUserId:
+          type: "integer"
+          nullable: true
+          readOnly: true
+        createdAt:
+          type: "string"
+          format: "date-time"
+        updatedAt:
+          type: "string"
+          format: "date-time"
+    BatchSale:
+      type: "object"
+      properties:
+        quantityKg:
+          type: "string"
+        unitPrice:
+          type: "string"
+        soldAt:
+          type: "string"
+          format: "date-time"
+          description: "Mặc định hiện tại khi tạo; cũng chấp nhận YYYY-MM-DD."
+        buyer:
+          type: "string"
+          nullable: true
+          maxLength: 255
+        notes:
+          type: "string"
+          nullable: true
+          maxLength: 10000
+        id:
+          type: "integer"
+          minimum: 1
+        batchId:
+          type: "integer"
+          minimum: 1
+        amount:
+          type: "string"
+          readOnly: true
+        createdByUserId:
+          type: "integer"
+          nullable: true
+          readOnly: true
+        updatedByUserId:
+          type: "integer"
+          nullable: true
+          readOnly: true
+        createdAt:
+          type: "string"
+          format: "date-time"
+        updatedAt:
+          type: "string"
+          format: "date-time"
+    FinancialSummary:
+      type: "object"
+      properties:
+        currency:
+          type: "string"
+          enum: ["VND"]
+        totalHarvestKg:
+          type: "number"
+        totalSoldKg:
+          type: "number"
+        revenue:
+          type: "string"
+        totalCost:
+          type: "string"
+        profit:
+          type: "string"
+        costsByCategory:
+          type: "object"
+          properties:
+            MATERIAL:
+              type: "string"
+            TOOL:
+              type: "string"
+            FERTILIZER:
+              type: "string"
+            OTHER:
+              type: "string"
+        profitMarginPercent:
+          type: "string"
+          nullable: true
+        costPerHarvestKg:
+          type: "string"
+          nullable: true
+    FinancialSeriesPoint:
+      type: "object"
+      properties:
+        period:
+          type: "string"
+        revenue:
+          type: "string"
+        totalCost:
+          type: "string"
+        profit:
+          type: "string"
+    FinancialReportRow:
+      type: "object"
+      properties:
+        batchId:
+          type: "integer"
+          minimum: 1
+        batchCode:
+          type: "string"
+        status:
+          type: "string"
+        facility:
+          type: "string"
+        mushroom:
+          type: "string"
+        currency:
+          type: "string"
+          enum: ["VND"]
+        totalHarvestKg:
+          type: "number"
+        totalSoldKg:
+          type: "number"
+        revenue:
+          type: "string"
+        totalCost:
+          type: "string"
+        profit:
+          type: "string"
+        costsByCategory:
+          type: "object"
+          properties:
+            MATERIAL:
+              type: "string"
+            TOOL:
+              type: "string"
+            FERTILIZER:
+              type: "string"
+            OTHER:
+              type: "string"
+        profitMarginPercent:
+          type: "string"
+          nullable: true
+        costPerHarvestKg:
+          type: "string"
+          nullable: true
+        series:
+          type: "array"
+          items:
+            $ref: "#/components/schemas/FinancialSeriesPoint"
+    GalleryImage:
+      type: "object"
+      properties:
+        id:
+          type: "integer"
+          minimum: 1
+        facilityId:
+          type: "integer"
+          minimum: 1
+        mushroomId:
+          type: "integer"
+          minimum: 1
+        batchId:
+          type: "integer"
+          minimum: 1
+        imageUrl:
+          type: "string"
+        originalName:
+          type: "string"
+        mimeType:
+          type: "string"
+        fileSize:
+          type: "integer"
+        caption:
+          type: "string"
+          nullable: true
+          maxLength: 500
+        isCover:
+          type: "boolean"
+        uploadedByUserId:
+          type: "integer"
+          nullable: true
+          readOnly: true
+        createdAt:
+          type: "string"
+          format: "date-time"
+    GalleryImageUpdateInput:
+      type: "object"
+      additionalProperties: false
+      properties:
+        caption:
+          type: "string"
+          nullable: true
+          maxLength: 500
+        isCover:
+          type: "boolean"
+          enum: [true]
     TaskCreateInput:
       type: object
       properties:
@@ -32,9 +614,6 @@ components:
           type: string
           format: date-time
           nullable: true
-        status:
-          type: string
-          enum: [TODO, IN_PROGRESS, COMPLETED, CANCELLED]
       required: [title]
     TaskUpdateInput:
       type: object
@@ -57,10 +636,13 @@ components:
           nullable: true
         status:
           type: string
-          enum: [TODO, IN_PROGRESS, COMPLETED, CANCELLED]
+          enum: [TODO, IN_PROGRESS, CANCELLED]
     Mushroom:
       type: object
       properties:
+        id:
+          type: integer
+          readOnly: true
         scientificName:
           type: string
         commonName:
@@ -100,9 +682,19 @@ components:
           enum: [EASY, MEDIUM, HARD, UNCULTIVABLE]
         imageUrl:
           type: string
+        coverImageUrl:
+          type: "string"
+          nullable: true
+          readOnly: true
+        imageCount:
+          type: "integer"
+          readOnly: true
     ProductionFacility:
       type: object
       properties:
+        id:
+          type: integer
+          readOnly: true
         name:
           type: string
         taxCode:
@@ -131,9 +723,19 @@ components:
           type: array
           items:
             type: integer
+        coverImageUrl:
+          type: "string"
+          nullable: true
+          readOnly: true
+        imageCount:
+          type: "integer"
+          readOnly: true
     CultivationBatch:
       type: object
       properties:
+        id:
+          type: integer
+          readOnly: true
         batchCode:
           type: string
         facilityId:
@@ -164,6 +766,13 @@ components:
           type: number
         notes:
           type: string
+        coverImageUrl:
+          type: "string"
+          nullable: true
+          readOnly: true
+        imageCount:
+          type: "integer"
+          readOnly: true
     CultivationCareLog:
       type: object
       properties:
@@ -178,6 +787,14 @@ components:
         recordedAt:
           type: string
           format: date-time
+        createdByUserId:
+          type: "integer"
+          nullable: true
+          readOnly: true
+        updatedByUserId:
+          type: "integer"
+          nullable: true
+          readOnly: true
     GrowthProgressRecord:
       type: object
       required: [id, batchId, stage, notes, recordedAt, createdAt, updatedAt]
@@ -207,6 +824,14 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/GrowthProgressImage'
+        createdByUserId:
+          type: "integer"
+          nullable: true
+          readOnly: true
+        updatedByUserId:
+          type: "integer"
+          nullable: true
+          readOnly: true
     GrowthProgressImage:
       type: object
       required: [id, growthProgressId, imageUrl, originalName, mimeType, fileSize, createdAt]
@@ -324,6 +949,14 @@ components:
           type: string
         notes:
           type: string
+        createdByUserId:
+          type: "integer"
+          nullable: true
+          readOnly: true
+        updatedByUserId:
+          type: "integer"
+          nullable: true
+          readOnly: true
   parameters:
     ReportFrom:
       name: from
@@ -505,7 +1138,7 @@ paths:
         - name: type
           in: path
           required: true
-          schema: { type: string, enum: [overview, cultivation, classifier, audit] }
+          schema: { type: string, enum: [overview, cultivation, classifier, audit, financial] }
         - name: format
           in: query
           required: true
@@ -681,6 +1314,24 @@ paths:
           description: Thêm giống nấm thành công
   
   /api/mushroom-species/{id}:
+    get:
+      summary: Chi tiết giống nấm và thông tin gallery
+      tags: [Quản lý giống nấm]
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: integer, minimum: 1 } }
+      responses:
+        '200':
+          description: Chi tiết giống nấm
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    $ref: '#/components/schemas/Mushroom'
+        '401': { description: Token không hợp lệ }
+        '403': { description: Không đủ quyền }
+        '404': { description: Không tìm thấy giống nấm }
     put:
       summary: Cập nhật thông tin giống nấm
       tags: [Quản lý Giống Nấm]
@@ -1287,55 +1938,151 @@ paths:
 
   /api/dashboard/tasks:
     get:
-      summary: Danh sách công việc dashboard
-      tags: [Dashboard]
-      parameters:
-        - { name: page, in: query, schema: { type: integer, minimum: 1 } }
-        - { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 50 } }
-        - { name: search, in: query, schema: { type: string } }
-        - { name: batchId, in: query, schema: { type: integer } }
-        - { name: assigneeUserId, in: query, schema: { type: integer } }
-        - { name: status, in: query, schema: { type: string, enum: [TODO, IN_PROGRESS, COMPLETED, CANCELLED, ALL] } }
+      summary: "Danh sách công việc; mặc định TODO, IN_PROGRESS, PENDING_REVIEW"
+      tags: ["Dashboard"]
+      parameters: [{"name":"page","in":"query","schema":{"type":"integer","minimum":1,"default":1}},{"name":"limit","in":"query","schema":{"type":"integer","minimum":1,"default":10,"maximum":50}},{"name":"search","in":"query","schema":{"type":"string"}},{"name":"batchId","in":"query","schema":{"type":"integer","minimum":1}},{"name":"assigneeUserId","in":"query","schema":{"type":"integer","minimum":1}},{"name":"status","in":"query","schema":{"type":"string","enum":["TODO","IN_PROGRESS","PENDING_REVIEW","COMPLETED","CANCELLED","ALL"]}}]
       responses:
-        '200': { description: Danh sách phân trang; mặc định chỉ việc đang mở }
+        "200":
+          description: "Thành công"
+          content:
+            application/json:
+              schema:
+                type: "object"
+                properties:
+                  data:
+                    type: "array"
+                    items:
+                      $ref: "#/components/schemas/Task"
+                  pagination:
+                    $ref: "#/components/schemas/Pagination"
+        "400":
+          description: "Dữ liệu không hợp lệ"
+        "401":
+          description: "Token thiếu hoặc không hợp lệ"
+        "403":
+          description: "Không đủ quyền"
+        "404":
+          description: "Không tìm thấy dữ liệu"
+        "409":
+          description: "Dữ liệu/trạng thái thay đổi; tải lại trước khi thử lại"
+        "500":
+          description: "Lỗi máy chủ"
     post:
-      summary: Tạo công việc (admin hoặc manager)
-      tags: [Dashboard]
+      summary: "Tạo việc TODO (manager/admin)"
+      tags: ["Dashboard"]
+      parameters: []
       requestBody:
         required: true
         content:
           application/json:
             schema:
-              $ref: '#/components/schemas/TaskCreateInput'
+              $ref: "#/components/schemas/TaskCreateInput"
       responses:
-        '201': { description: Tạo công việc thành công }
-
+        "201":
+          description: "Thành công"
+          content:
+            application/json:
+              schema:
+                type: "object"
+                properties:
+                  message:
+                    type: "string"
+                  data:
+                    $ref: "#/components/schemas/Task"
+        "400":
+          description: "Dữ liệu không hợp lệ"
+        "401":
+          description: "Token thiếu hoặc không hợp lệ"
+        "403":
+          description: "Không đủ quyền"
+        "404":
+          description: "Không tìm thấy dữ liệu"
+        "409":
+          description: "Dữ liệu/trạng thái thay đổi; tải lại trước khi thử lại"
+        "500":
+          description: "Lỗi máy chủ"
   /api/dashboard/tasks/{id}:
     get:
-      summary: Chi tiết công việc
-      tags: [Dashboard]
-      parameters: [ { name: id, in: path, required: true, schema: { type: string, format: uuid } } ]
+      summary: "Chi tiết công việc và lịch sử minh chứng"
+      tags: ["Dashboard"]
+      parameters: [{"name":"id","in":"path","required":true,"schema":{"type":"string","format":"uuid"}}]
       responses:
-        '200': { description: Chi tiết công việc }
-        '404': { description: Không tìm thấy công việc }
+        "200":
+          description: "Thành công"
+          content:
+            application/json:
+              schema:
+                type: "object"
+                properties:
+                  message:
+                    type: "string"
+                  data:
+                    $ref: "#/components/schemas/TaskDetail"
+        "400":
+          description: "Dữ liệu không hợp lệ"
+        "401":
+          description: "Token thiếu hoặc không hợp lệ"
+        "403":
+          description: "Không đủ quyền"
+        "404":
+          description: "Không tìm thấy dữ liệu"
+        "409":
+          description: "Dữ liệu/trạng thái thay đổi; tải lại trước khi thử lại"
+        "500":
+          description: "Lỗi máy chủ"
     patch:
-      summary: Cập nhật công việc; staff chỉ đổi trạng thái việc được giao
-      tags: [Dashboard]
-      parameters: [ { name: id, in: path, required: true, schema: { type: string, format: uuid } } ]
+      summary: "Cập nhật việc; không hoàn thành/chờ duyệt trực tiếp"
+      tags: ["Dashboard"]
+      parameters: [{"name":"id","in":"path","required":true,"schema":{"type":"string","format":"uuid"}}]
       requestBody:
         required: true
         content:
           application/json:
             schema:
-              $ref: '#/components/schemas/TaskUpdateInput'
+              $ref: "#/components/schemas/TaskUpdateInput"
       responses:
-        '200': { description: Cập nhật công việc thành công }
+        "200":
+          description: "Thành công"
+          content:
+            application/json:
+              schema:
+                type: "object"
+                properties:
+                  message:
+                    type: "string"
+                  data:
+                    $ref: "#/components/schemas/Task"
+        "400":
+          description: "Dữ liệu không hợp lệ"
+        "401":
+          description: "Token thiếu hoặc không hợp lệ"
+        "403":
+          description: "Không đủ quyền"
+        "404":
+          description: "Không tìm thấy dữ liệu"
+        "409":
+          description: "Dữ liệu/trạng thái thay đổi; tải lại trước khi thử lại"
+        "500":
+          description: "Lỗi máy chủ"
     delete:
-      summary: Xóa công việc (admin hoặc manager)
-      tags: [Dashboard]
-      parameters: [ { name: id, in: path, required: true, schema: { type: string, format: uuid } } ]
+      summary: "Xóa việc chưa có lịch sử minh chứng (manager/admin)"
+      tags: ["Dashboard"]
+      parameters: [{"name":"id","in":"path","required":true,"schema":{"type":"string","format":"uuid"}}]
       responses:
-        '200': { description: Xóa công việc thành công }
+        "200":
+          description: "Đã xóa"
+        "400":
+          description: "Dữ liệu không hợp lệ"
+        "401":
+          description: "Token thiếu hoặc không hợp lệ"
+        "403":
+          description: "Không đủ quyền"
+        "404":
+          description: "Không tìm thấy dữ liệu"
+        "409":
+          description: "Dữ liệu/trạng thái thay đổi; tải lại trước khi thử lại"
+        "500":
+          description: "Lỗi máy chủ"
 
   /api/dashboard/task-assignees:
     get:
@@ -1343,3 +2090,823 @@ paths:
       tags: [Dashboard]
       responses:
         '200': { description: Danh sách người dùng phân trang }
+
+  /api/dashboard/tasks/{id}/evidence-candidates:
+    get:
+      summary: "Hành động đủ điều kiện (chỉ người được giao)"
+      tags: ["Dashboard"]
+      parameters: [{"name":"id","in":"path","required":true,"schema":{"type":"string","format":"uuid"}},{"name":"page","in":"query","schema":{"type":"integer","minimum":1,"default":1}},{"name":"limit","in":"query","schema":{"type":"integer","minimum":1,"default":10,"maximum":50}},{"name":"type","in":"query","schema":{"type":"string","enum":["CARE_LOG","GROWTH_PROGRESS","HARVEST"]}}]
+      responses:
+        "200":
+          description: "Thành công"
+          content:
+            application/json:
+              schema:
+                type: "object"
+                properties:
+                  data:
+                    type: "array"
+                    items:
+                      $ref: "#/components/schemas/EvidenceCandidate"
+                  pagination:
+                    $ref: "#/components/schemas/Pagination"
+        "400":
+          description: "Dữ liệu không hợp lệ"
+        "401":
+          description: "Token thiếu hoặc không hợp lệ"
+        "403":
+          description: "Không đủ quyền"
+        "404":
+          description: "Không tìm thấy dữ liệu"
+        "409":
+          description: "Dữ liệu/trạng thái thay đổi; tải lại trước khi thử lại"
+        "500":
+          description: "Lỗi máy chủ"
+  /api/dashboard/tasks/{id}/submissions:
+    post:
+      summary: "Gửi minh chứng; chuyển sang PENDING_REVIEW"
+      tags: ["Dashboard"]
+      parameters: [{"name":"id","in":"path","required":true,"schema":{"type":"string","format":"uuid"}}]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/TaskSubmissionInput"
+      responses:
+        "201":
+          description: "Thành công"
+          content:
+            application/json:
+              schema:
+                type: "object"
+                properties:
+                  message:
+                    type: "string"
+                  data:
+                    $ref: "#/components/schemas/TaskSubmission"
+        "400":
+          description: "Dữ liệu không hợp lệ"
+        "401":
+          description: "Token thiếu hoặc không hợp lệ"
+        "403":
+          description: "Không đủ quyền"
+        "404":
+          description: "Không tìm thấy dữ liệu"
+        "409":
+          description: "Dữ liệu/trạng thái thay đổi; tải lại trước khi thử lại"
+        "500":
+          description: "Lỗi máy chủ"
+  /api/dashboard/tasks/{id}/submissions/{submissionId}/review:
+    post:
+      summary: "Manager/admin duyệt hoặc trả lại; không tự duyệt"
+      tags: ["Dashboard"]
+      parameters: [{"name":"id","in":"path","required":true,"schema":{"type":"string","format":"uuid"}},{"name":"submissionId","in":"path","required":true,"schema":{"type":"string","format":"uuid"}}]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/TaskReviewInput"
+      responses:
+        "200":
+          description: "Thành công"
+          content:
+            application/json:
+              schema:
+                type: "object"
+                properties:
+                  message:
+                    type: "string"
+                  data:
+                    $ref: "#/components/schemas/TaskSubmission"
+        "400":
+          description: "Dữ liệu không hợp lệ"
+        "401":
+          description: "Token thiếu hoặc không hợp lệ"
+        "403":
+          description: "Không đủ quyền"
+        "404":
+          description: "Không tìm thấy dữ liệu"
+        "409":
+          description: "Dữ liệu/trạng thái thay đổi; tải lại trước khi thử lại"
+        "500":
+          description: "Lỗi máy chủ"
+  /api/cultivation-batches/{id}/financial-summary:
+    get:
+      summary: "Tài chính toàn bộ vòng đời lô (manager/admin)"
+      tags: ["Tài chính"]
+      parameters: [{"name":"id","in":"path","required":true,"schema":{"type":"integer","minimum":1}}]
+      responses:
+        "200":
+          description: "Thành công"
+          content:
+            application/json:
+              schema:
+                type: "object"
+                properties:
+                  message:
+                    type: "string"
+                  data:
+                    allOf: [{"$ref":"#/components/schemas/FinancialSummary"},{"type":"object","properties":{"batchId":{"type":"integer","minimum":1}}}]
+        "400":
+          description: "Dữ liệu không hợp lệ"
+        "401":
+          description: "Token thiếu hoặc không hợp lệ"
+        "403":
+          description: "Không đủ quyền"
+        "404":
+          description: "Không tìm thấy dữ liệu"
+        "409":
+          description: "Dữ liệu/trạng thái thay đổi; tải lại trước khi thử lại"
+        "500":
+          description: "Lỗi máy chủ"
+  /api/reports/financial:
+    get:
+      summary: "Báo cáo tài chính theo ngày bán/ngày chi (manager/admin)"
+      tags: ["Tài chính"]
+      parameters: [{"$ref":"#/components/parameters/ReportFrom"},{"$ref":"#/components/parameters/ReportTo"},{"$ref":"#/components/parameters/FacilityId"},{"$ref":"#/components/parameters/MushroomId"},{"$ref":"#/components/parameters/GroupBy"},{"name":"status","in":"query","schema":{"type":"string","enum":["PREPARATION","INCUBATION","FRUITING","HARVESTING","COMPLETED","FAILED"]}},{"name":"page","in":"query","schema":{"type":"integer","minimum":1,"default":1}},{"name":"limit","in":"query","schema":{"type":"integer","minimum":1,"default":20,"maximum":100}}]
+      responses:
+        "200":
+          description: "Thành công"
+          content:
+            application/json:
+              schema:
+                type: "object"
+                properties:
+                  data:
+                    type: "array"
+                    items:
+                      $ref: "#/components/schemas/FinancialReportRow"
+                  pagination:
+                    $ref: "#/components/schemas/Pagination"
+                  summary:
+                    $ref: "#/components/schemas/FinancialSummary"
+                  series:
+                    type: "array"
+                    items:
+                      $ref: "#/components/schemas/FinancialSeriesPoint"
+                  period:
+                    type: "object"
+                    properties:
+                      from:
+                        type: "string"
+                        format: "date-time"
+                      to:
+                        type: "string"
+                        format: "date-time"
+                      groupBy:
+                        type: "string"
+                        enum: ["day","month"]
+        "400":
+          description: "Dữ liệu không hợp lệ"
+        "401":
+          description: "Token thiếu hoặc không hợp lệ"
+        "403":
+          description: "Không đủ quyền"
+        "404":
+          description: "Không tìm thấy dữ liệu"
+        "409":
+          description: "Dữ liệu/trạng thái thay đổi; tải lại trước khi thử lại"
+        "500":
+          description: "Lỗi máy chủ"
+  /api/cultivation-batches/{id}/expenses:
+    get:
+      summary: "Danh sách expenses (manager/admin)"
+      tags: ["Tài chính"]
+      parameters: [{"name":"id","in":"path","required":true,"schema":{"type":"integer","minimum":1}},{"name":"page","in":"query","schema":{"type":"integer","minimum":1,"default":1}},{"name":"limit","in":"query","schema":{"type":"integer","minimum":1,"default":10,"maximum":50}}]
+      responses:
+        "200":
+          description: "Thành công"
+          content:
+            application/json:
+              schema:
+                type: "object"
+                properties:
+                  data:
+                    type: "array"
+                    items:
+                      $ref: "#/components/schemas/BatchExpense"
+                  pagination:
+                    $ref: "#/components/schemas/Pagination"
+        "400":
+          description: "Dữ liệu không hợp lệ"
+        "401":
+          description: "Token thiếu hoặc không hợp lệ"
+        "403":
+          description: "Không đủ quyền"
+        "404":
+          description: "Không tìm thấy dữ liệu"
+        "409":
+          description: "Dữ liệu/trạng thái thay đổi; tải lại trước khi thử lại"
+        "500":
+          description: "Lỗi máy chủ"
+    post:
+      summary: "Tạo expenses (manager/admin)"
+      tags: ["Tài chính"]
+      parameters: [{"name":"id","in":"path","required":true,"schema":{"type":"integer","minimum":1}}]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ExpenseInput"
+      responses:
+        "201":
+          description: "Thành công"
+          content:
+            application/json:
+              schema:
+                type: "object"
+                properties:
+                  message:
+                    type: "string"
+                  data:
+                    $ref: "#/components/schemas/BatchExpense"
+        "400":
+          description: "Dữ liệu không hợp lệ"
+        "401":
+          description: "Token thiếu hoặc không hợp lệ"
+        "403":
+          description: "Không đủ quyền"
+        "404":
+          description: "Không tìm thấy dữ liệu"
+        "409":
+          description: "Dữ liệu/trạng thái thay đổi; tải lại trước khi thử lại"
+        "500":
+          description: "Lỗi máy chủ"
+  /api/cultivation-batches/{id}/expenses/{entryId}:
+    patch:
+      summary: "Sửa expenses (manager/admin)"
+      tags: ["Tài chính"]
+      parameters: [{"name":"id","in":"path","required":true,"schema":{"type":"integer","minimum":1}},{"name":"entryId","in":"path","required":true,"schema":{"type":"integer","minimum":1}}]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ExpenseUpdateInput"
+      responses:
+        "200":
+          description: "Thành công"
+          content:
+            application/json:
+              schema:
+                type: "object"
+                properties:
+                  message:
+                    type: "string"
+                  data:
+                    $ref: "#/components/schemas/BatchExpense"
+        "400":
+          description: "Dữ liệu không hợp lệ"
+        "401":
+          description: "Token thiếu hoặc không hợp lệ"
+        "403":
+          description: "Không đủ quyền"
+        "404":
+          description: "Không tìm thấy dữ liệu"
+        "409":
+          description: "Dữ liệu/trạng thái thay đổi; tải lại trước khi thử lại"
+        "500":
+          description: "Lỗi máy chủ"
+    delete:
+      summary: "Xóa expenses (manager/admin)"
+      tags: ["Tài chính"]
+      parameters: [{"name":"id","in":"path","required":true,"schema":{"type":"integer","minimum":1}},{"name":"entryId","in":"path","required":true,"schema":{"type":"integer","minimum":1}}]
+      responses:
+        "200":
+          description: "Đã xóa"
+        "400":
+          description: "Dữ liệu không hợp lệ"
+        "401":
+          description: "Token thiếu hoặc không hợp lệ"
+        "403":
+          description: "Không đủ quyền"
+        "404":
+          description: "Không tìm thấy dữ liệu"
+        "409":
+          description: "Dữ liệu/trạng thái thay đổi; tải lại trước khi thử lại"
+        "500":
+          description: "Lỗi máy chủ"
+  /api/cultivation-batches/{id}/sales:
+    get:
+      summary: "Danh sách sales (manager/admin)"
+      tags: ["Tài chính"]
+      parameters: [{"name":"id","in":"path","required":true,"schema":{"type":"integer","minimum":1}},{"name":"page","in":"query","schema":{"type":"integer","minimum":1,"default":1}},{"name":"limit","in":"query","schema":{"type":"integer","minimum":1,"default":10,"maximum":50}}]
+      responses:
+        "200":
+          description: "Thành công"
+          content:
+            application/json:
+              schema:
+                type: "object"
+                properties:
+                  data:
+                    type: "array"
+                    items:
+                      $ref: "#/components/schemas/BatchSale"
+                  pagination:
+                    $ref: "#/components/schemas/Pagination"
+        "400":
+          description: "Dữ liệu không hợp lệ"
+        "401":
+          description: "Token thiếu hoặc không hợp lệ"
+        "403":
+          description: "Không đủ quyền"
+        "404":
+          description: "Không tìm thấy dữ liệu"
+        "409":
+          description: "Dữ liệu/trạng thái thay đổi; tải lại trước khi thử lại"
+        "500":
+          description: "Lỗi máy chủ"
+    post:
+      summary: "Tạo sales (manager/admin)"
+      tags: ["Tài chính"]
+      parameters: [{"name":"id","in":"path","required":true,"schema":{"type":"integer","minimum":1}}]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SaleInput"
+      responses:
+        "201":
+          description: "Thành công"
+          content:
+            application/json:
+              schema:
+                type: "object"
+                properties:
+                  message:
+                    type: "string"
+                  data:
+                    $ref: "#/components/schemas/BatchSale"
+        "400":
+          description: "Dữ liệu không hợp lệ"
+        "401":
+          description: "Token thiếu hoặc không hợp lệ"
+        "403":
+          description: "Không đủ quyền"
+        "404":
+          description: "Không tìm thấy dữ liệu"
+        "409":
+          description: "Dữ liệu/trạng thái thay đổi; tải lại trước khi thử lại"
+        "500":
+          description: "Lỗi máy chủ"
+  /api/cultivation-batches/{id}/sales/{entryId}:
+    patch:
+      summary: "Sửa sales (manager/admin)"
+      tags: ["Tài chính"]
+      parameters: [{"name":"id","in":"path","required":true,"schema":{"type":"integer","minimum":1}},{"name":"entryId","in":"path","required":true,"schema":{"type":"integer","minimum":1}}]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SaleUpdateInput"
+      responses:
+        "200":
+          description: "Thành công"
+          content:
+            application/json:
+              schema:
+                type: "object"
+                properties:
+                  message:
+                    type: "string"
+                  data:
+                    $ref: "#/components/schemas/BatchSale"
+        "400":
+          description: "Dữ liệu không hợp lệ"
+        "401":
+          description: "Token thiếu hoặc không hợp lệ"
+        "403":
+          description: "Không đủ quyền"
+        "404":
+          description: "Không tìm thấy dữ liệu"
+        "409":
+          description: "Dữ liệu/trạng thái thay đổi; tải lại trước khi thử lại"
+        "500":
+          description: "Lỗi máy chủ"
+    delete:
+      summary: "Xóa sales (manager/admin)"
+      tags: ["Tài chính"]
+      parameters: [{"name":"id","in":"path","required":true,"schema":{"type":"integer","minimum":1}},{"name":"entryId","in":"path","required":true,"schema":{"type":"integer","minimum":1}}]
+      responses:
+        "200":
+          description: "Đã xóa"
+        "400":
+          description: "Dữ liệu không hợp lệ"
+        "401":
+          description: "Token thiếu hoặc không hợp lệ"
+        "403":
+          description: "Không đủ quyền"
+        "404":
+          description: "Không tìm thấy dữ liệu"
+        "409":
+          description: "Dữ liệu/trạng thái thay đổi; tải lại trước khi thử lại"
+        "500":
+          description: "Lỗi máy chủ"
+  /api/production-facilities/{id}/images:
+    get:
+      summary: "Xem gallery (admin/manager/staff)"
+      tags: ["Gallery"]
+      parameters: [{"name":"id","in":"path","required":true,"schema":{"type":"integer","minimum":1}},{"name":"page","in":"query","schema":{"type":"integer","minimum":1,"default":1}},{"name":"limit","in":"query","schema":{"type":"integer","minimum":1,"default":10,"maximum":50}}]
+      responses:
+        "200":
+          description: "Thành công"
+          content:
+            application/json:
+              schema:
+                type: "object"
+                properties:
+                  data:
+                    type: "array"
+                    items:
+                      $ref: "#/components/schemas/GalleryImage"
+                  pagination:
+                    $ref: "#/components/schemas/Pagination"
+        "400":
+          description: "Dữ liệu không hợp lệ"
+        "401":
+          description: "Token thiếu hoặc không hợp lệ"
+        "403":
+          description: "Không đủ quyền"
+        "404":
+          description: "Không tìm thấy dữ liệu"
+        "409":
+          description: "Dữ liệu/trạng thái thay đổi; tải lại trước khi thử lại"
+        "500":
+          description: "Lỗi máy chủ"
+    post:
+      summary: "Thêm ảnh gallery (manager/admin)"
+      tags: ["Gallery"]
+      parameters: [{"name":"id","in":"path","required":true,"schema":{"type":"integer","minimum":1}}]
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: "object"
+              required: ["images"]
+              properties:
+                images:
+                  type: "array"
+                  minItems: 1
+                  maxItems: 5
+                  items:
+                    type: "string"
+                    format: "binary"
+                  description: "JPEG/PNG/WebP; mỗi ảnh tối đa 5 MB"
+                caption:
+                  type: "string"
+                  maxLength: 500
+      responses:
+        "201":
+          description: "Thành công"
+          content:
+            application/json:
+              schema:
+                type: "object"
+                properties:
+                  message:
+                    type: "string"
+                  data:
+                    type: "array"
+                    items:
+                      $ref: "#/components/schemas/GalleryImage"
+        "400":
+          description: "Dữ liệu không hợp lệ"
+        "401":
+          description: "Token thiếu hoặc không hợp lệ"
+        "403":
+          description: "Không đủ quyền"
+        "404":
+          description: "Không tìm thấy dữ liệu"
+        "409":
+          description: "Dữ liệu/trạng thái thay đổi; tải lại trước khi thử lại"
+        "500":
+          description: "Lỗi máy chủ"
+  /api/production-facilities/{id}/images/{imageId}:
+    patch:
+      summary: "Đổi chú thích/chọn ảnh bìa (manager/admin)"
+      tags: ["Gallery"]
+      parameters: [{"name":"id","in":"path","required":true,"schema":{"type":"integer","minimum":1}},{"name":"imageId","in":"path","required":true,"schema":{"type":"integer","minimum":1}}]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/GalleryImageUpdateInput"
+      responses:
+        "200":
+          description: "Thành công"
+          content:
+            application/json:
+              schema:
+                type: "object"
+                properties:
+                  message:
+                    type: "string"
+                  data:
+                    $ref: "#/components/schemas/GalleryImage"
+        "400":
+          description: "Dữ liệu không hợp lệ"
+        "401":
+          description: "Token thiếu hoặc không hợp lệ"
+        "403":
+          description: "Không đủ quyền"
+        "404":
+          description: "Không tìm thấy dữ liệu"
+        "409":
+          description: "Dữ liệu/trạng thái thay đổi; tải lại trước khi thử lại"
+        "500":
+          description: "Lỗi máy chủ"
+    delete:
+      summary: "Xóa ảnh, tự chọn bìa thay thế (manager/admin)"
+      tags: ["Gallery"]
+      parameters: [{"name":"id","in":"path","required":true,"schema":{"type":"integer","minimum":1}},{"name":"imageId","in":"path","required":true,"schema":{"type":"integer","minimum":1}}]
+      responses:
+        "200":
+          description: "Đã xóa"
+        "400":
+          description: "Dữ liệu không hợp lệ"
+        "401":
+          description: "Token thiếu hoặc không hợp lệ"
+        "403":
+          description: "Không đủ quyền"
+        "404":
+          description: "Không tìm thấy dữ liệu"
+        "409":
+          description: "Dữ liệu/trạng thái thay đổi; tải lại trước khi thử lại"
+        "500":
+          description: "Lỗi máy chủ"
+  /api/mushroom-species/{id}/images:
+    get:
+      summary: "Xem gallery (admin/manager/staff)"
+      tags: ["Gallery"]
+      parameters: [{"name":"id","in":"path","required":true,"schema":{"type":"integer","minimum":1}},{"name":"page","in":"query","schema":{"type":"integer","minimum":1,"default":1}},{"name":"limit","in":"query","schema":{"type":"integer","minimum":1,"default":10,"maximum":50}}]
+      responses:
+        "200":
+          description: "Thành công"
+          content:
+            application/json:
+              schema:
+                type: "object"
+                properties:
+                  data:
+                    type: "array"
+                    items:
+                      $ref: "#/components/schemas/GalleryImage"
+                  pagination:
+                    $ref: "#/components/schemas/Pagination"
+        "400":
+          description: "Dữ liệu không hợp lệ"
+        "401":
+          description: "Token thiếu hoặc không hợp lệ"
+        "403":
+          description: "Không đủ quyền"
+        "404":
+          description: "Không tìm thấy dữ liệu"
+        "409":
+          description: "Dữ liệu/trạng thái thay đổi; tải lại trước khi thử lại"
+        "500":
+          description: "Lỗi máy chủ"
+    post:
+      summary: "Thêm ảnh gallery (manager/admin)"
+      tags: ["Gallery"]
+      parameters: [{"name":"id","in":"path","required":true,"schema":{"type":"integer","minimum":1}}]
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: "object"
+              required: ["images"]
+              properties:
+                images:
+                  type: "array"
+                  minItems: 1
+                  maxItems: 5
+                  items:
+                    type: "string"
+                    format: "binary"
+                  description: "JPEG/PNG/WebP; mỗi ảnh tối đa 5 MB"
+                caption:
+                  type: "string"
+                  maxLength: 500
+      responses:
+        "201":
+          description: "Thành công"
+          content:
+            application/json:
+              schema:
+                type: "object"
+                properties:
+                  message:
+                    type: "string"
+                  data:
+                    type: "array"
+                    items:
+                      $ref: "#/components/schemas/GalleryImage"
+        "400":
+          description: "Dữ liệu không hợp lệ"
+        "401":
+          description: "Token thiếu hoặc không hợp lệ"
+        "403":
+          description: "Không đủ quyền"
+        "404":
+          description: "Không tìm thấy dữ liệu"
+        "409":
+          description: "Dữ liệu/trạng thái thay đổi; tải lại trước khi thử lại"
+        "500":
+          description: "Lỗi máy chủ"
+  /api/mushroom-species/{id}/images/{imageId}:
+    patch:
+      summary: "Đổi chú thích/chọn ảnh bìa (manager/admin)"
+      tags: ["Gallery"]
+      parameters: [{"name":"id","in":"path","required":true,"schema":{"type":"integer","minimum":1}},{"name":"imageId","in":"path","required":true,"schema":{"type":"integer","minimum":1}}]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/GalleryImageUpdateInput"
+      responses:
+        "200":
+          description: "Thành công"
+          content:
+            application/json:
+              schema:
+                type: "object"
+                properties:
+                  message:
+                    type: "string"
+                  data:
+                    $ref: "#/components/schemas/GalleryImage"
+        "400":
+          description: "Dữ liệu không hợp lệ"
+        "401":
+          description: "Token thiếu hoặc không hợp lệ"
+        "403":
+          description: "Không đủ quyền"
+        "404":
+          description: "Không tìm thấy dữ liệu"
+        "409":
+          description: "Dữ liệu/trạng thái thay đổi; tải lại trước khi thử lại"
+        "500":
+          description: "Lỗi máy chủ"
+    delete:
+      summary: "Xóa ảnh, tự chọn bìa thay thế (manager/admin)"
+      tags: ["Gallery"]
+      parameters: [{"name":"id","in":"path","required":true,"schema":{"type":"integer","minimum":1}},{"name":"imageId","in":"path","required":true,"schema":{"type":"integer","minimum":1}}]
+      responses:
+        "200":
+          description: "Đã xóa"
+        "400":
+          description: "Dữ liệu không hợp lệ"
+        "401":
+          description: "Token thiếu hoặc không hợp lệ"
+        "403":
+          description: "Không đủ quyền"
+        "404":
+          description: "Không tìm thấy dữ liệu"
+        "409":
+          description: "Dữ liệu/trạng thái thay đổi; tải lại trước khi thử lại"
+        "500":
+          description: "Lỗi máy chủ"
+  /api/cultivation-batches/{id}/images:
+    get:
+      summary: "Xem gallery (admin/manager/staff)"
+      tags: ["Gallery"]
+      parameters: [{"name":"id","in":"path","required":true,"schema":{"type":"integer","minimum":1}},{"name":"page","in":"query","schema":{"type":"integer","minimum":1,"default":1}},{"name":"limit","in":"query","schema":{"type":"integer","minimum":1,"default":10,"maximum":50}}]
+      responses:
+        "200":
+          description: "Thành công"
+          content:
+            application/json:
+              schema:
+                type: "object"
+                properties:
+                  data:
+                    type: "array"
+                    items:
+                      $ref: "#/components/schemas/GalleryImage"
+                  pagination:
+                    $ref: "#/components/schemas/Pagination"
+        "400":
+          description: "Dữ liệu không hợp lệ"
+        "401":
+          description: "Token thiếu hoặc không hợp lệ"
+        "403":
+          description: "Không đủ quyền"
+        "404":
+          description: "Không tìm thấy dữ liệu"
+        "409":
+          description: "Dữ liệu/trạng thái thay đổi; tải lại trước khi thử lại"
+        "500":
+          description: "Lỗi máy chủ"
+    post:
+      summary: "Thêm ảnh gallery (manager/admin)"
+      tags: ["Gallery"]
+      parameters: [{"name":"id","in":"path","required":true,"schema":{"type":"integer","minimum":1}}]
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: "object"
+              required: ["images"]
+              properties:
+                images:
+                  type: "array"
+                  minItems: 1
+                  maxItems: 5
+                  items:
+                    type: "string"
+                    format: "binary"
+                  description: "JPEG/PNG/WebP; mỗi ảnh tối đa 5 MB"
+                caption:
+                  type: "string"
+                  maxLength: 500
+      responses:
+        "201":
+          description: "Thành công"
+          content:
+            application/json:
+              schema:
+                type: "object"
+                properties:
+                  message:
+                    type: "string"
+                  data:
+                    type: "array"
+                    items:
+                      $ref: "#/components/schemas/GalleryImage"
+        "400":
+          description: "Dữ liệu không hợp lệ"
+        "401":
+          description: "Token thiếu hoặc không hợp lệ"
+        "403":
+          description: "Không đủ quyền"
+        "404":
+          description: "Không tìm thấy dữ liệu"
+        "409":
+          description: "Dữ liệu/trạng thái thay đổi; tải lại trước khi thử lại"
+        "500":
+          description: "Lỗi máy chủ"
+  /api/cultivation-batches/{id}/images/{imageId}:
+    patch:
+      summary: "Đổi chú thích/chọn ảnh bìa (manager/admin)"
+      tags: ["Gallery"]
+      parameters: [{"name":"id","in":"path","required":true,"schema":{"type":"integer","minimum":1}},{"name":"imageId","in":"path","required":true,"schema":{"type":"integer","minimum":1}}]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/GalleryImageUpdateInput"
+      responses:
+        "200":
+          description: "Thành công"
+          content:
+            application/json:
+              schema:
+                type: "object"
+                properties:
+                  message:
+                    type: "string"
+                  data:
+                    $ref: "#/components/schemas/GalleryImage"
+        "400":
+          description: "Dữ liệu không hợp lệ"
+        "401":
+          description: "Token thiếu hoặc không hợp lệ"
+        "403":
+          description: "Không đủ quyền"
+        "404":
+          description: "Không tìm thấy dữ liệu"
+        "409":
+          description: "Dữ liệu/trạng thái thay đổi; tải lại trước khi thử lại"
+        "500":
+          description: "Lỗi máy chủ"
+    delete:
+      summary: "Xóa ảnh, tự chọn bìa thay thế (manager/admin)"
+      tags: ["Gallery"]
+      parameters: [{"name":"id","in":"path","required":true,"schema":{"type":"integer","minimum":1}},{"name":"imageId","in":"path","required":true,"schema":{"type":"integer","minimum":1}}]
+      responses:
+        "200":
+          description: "Đã xóa"
+        "400":
+          description: "Dữ liệu không hợp lệ"
+        "401":
+          description: "Token thiếu hoặc không hợp lệ"
+        "403":
+          description: "Không đủ quyền"
+        "404":
+          description: "Không tìm thấy dữ liệu"
+        "409":
+          description: "Dữ liệu/trạng thái thay đổi; tải lại trước khi thử lại"
+        "500":
+          description: "Lỗi máy chủ"

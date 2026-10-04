@@ -12,7 +12,7 @@ global.prisma = {
     cultivationCareLog: { findMany: async () => [{ id: 1, batchId: 1 }], create: async ({ data }) => ({ id: 2, ...data }) },
     harvestRecord: { findMany: async () => [{ id: 1, totalYieldKg: 10 }], create: async ({ data }) => ({ id: 2, ...data }) },
     growthProgressRecord: { findMany: async () => [], create: async ({ data }) => ({ id: 1, ...data }), findFirst: async () => null, update: async () => null },
-    $transaction: async (callback) => callback({ harvestRecord: { create: async ({ data }) => ({ id: 3, ...data }) }, cultivationBatch: { update: async () => batch } })
+    $transaction: async (callback) => callback({ harvestRecord: { create: async ({ data }) => ({ id: 3, ...data }), aggregate: async () => ({ _sum: { totalYieldKg: 22.5 } }) }, cultivationBatch: { update: async () => batch, updateMany: async () => ({ count: 1 }) } })
 };
 const app = express(); app.use(express.json()); app.use('/api/cultivation-batches', require('../routes/cultivationBatchManagement'));
 let server; let baseUrl;

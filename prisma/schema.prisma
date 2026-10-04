@@ -29,6 +29,21 @@ model User {
   auditLogs         AuditLog[]
   createdTasks      Task[] @relation("TaskCreator")
   assignedTasks     Task[] @relation("TaskAssignee")
+  submissions TaskSubmission[] @relation("SubmissionAuthor")
+  reviews TaskSubmission[] @relation("SubmissionReviewer")
+  createdCareLogs CultivationCareLog[] @relation("CareCreator")
+  updatedCareLogs CultivationCareLog[] @relation("CareUpdater")
+  createdGrowthRecords GrowthProgressRecord[] @relation("GrowthCreator")
+  updatedGrowthRecords GrowthProgressRecord[] @relation("GrowthUpdater")
+  createdHarvests HarvestRecord[] @relation("HarvestCreator")
+  updatedHarvests HarvestRecord[] @relation("HarvestUpdater")
+  createdExpenses BatchExpense[] @relation("ExpenseCreator")
+  updatedExpenses BatchExpense[] @relation("ExpenseUpdater")
+  createdSales BatchSale[] @relation("SaleCreator")
+  updatedSales BatchSale[] @relation("SaleUpdater")
+  facilityImages FacilityImage[]
+  mushroomImages MushroomImage[]
+  batchImages BatchImage[]
 
   @@map("users")
 }
@@ -90,8 +105,23 @@ enum AuditOutcome {
 enum TaskStatus {
   TODO
   IN_PROGRESS
+  PENDING_REVIEW
   COMPLETED
   CANCELLED
+}
+
+enum SubmissionStatus {
+  PENDING
+  APPROVED
+  REJECTED
+  CANCELLED
+}
+
+enum ExpenseCategory {
+  MATERIAL
+  TOOL
+  FERTILIZER
+  OTHER
 }
 
 // ------------------------------------------------------
@@ -136,6 +166,7 @@ model Mushroom {
   updatedAt          DateTime             @updatedAt @map("updated_at")
   facilities         ProductionFacility[] @relation("FacilityToMushroom")
   cultivationBatches CultivationBatch[]
+  images MushroomImage[]
 
   @@map("mushroom_species") // Tên bảng thực tế trong Database
 }
@@ -161,6 +192,7 @@ model ProductionFacility {
   createdAt          DateTime           @default(now()) @map("created_at")
   updatedAt          DateTime           @updatedAt @map("updated_at")
   cultivationBatches CultivationBatch[]
+  images FacilityImage[]
 
   @@map("production_facilities")
 }
@@ -198,6 +230,9 @@ model CultivationBatch {
   growthRecords  GrowthProgressRecord[]
   harvestRecords HarvestRecord[]
   tasks          Task[]
+  expenses BatchExpense[]
+  sales BatchSale[]
+  images BatchImage[]
 
   @@index([startDate])
   @@index([facilityId, startDate])
@@ -217,6 +252,8 @@ model Task {
   dueAt          DateTime?  @map("due_at")
   createdAt      DateTime   @default(now()) @map("created_at")
   updatedAt      DateTime   @updatedAt @map("updated_at")
+  version Int @default(0)
+  submissions TaskSubmission[]
 
   batch      CultivationBatch? @relation(fields: [batchId], references: [id], onDelete: SetNull)
   assignee   User? @relation("TaskAssignee", fields: [assigneeUserId], references: [id], onDelete: SetNull)
@@ -235,6 +272,10 @@ model CultivationCareLog {
   notes      String   @db.Text
   recordedAt DateTime @default(now()) @map("recorded_at")
   createdAt  DateTime @default(now()) @map("created_at")
+  createdByUserId Int? @map("created_by_user_id")
+  updatedByUserId Int? @map("updated_by_user_id")
+  createdBy User? @relation("CareCreator", fields: [createdByUserId], references: [id], onDelete: SetNull)
+  updatedBy User? @relation("CareUpdater", fields: [updatedByUserId], references: [id], onDelete: SetNull)
 
   batch CultivationBatch @relation(fields: [batchId], references: [id], onDelete: Cascade)
 
@@ -249,6 +290,10 @@ model GrowthProgressRecord {
   recordedAt DateTime @default(now()) @map("recorded_at")
   createdAt  DateTime @default(now()) @map("created_at")
   updatedAt  DateTime @default(now()) @updatedAt @map("updated_at")
+  createdByUserId Int? @map("created_by_user_id")
+  updatedByUserId Int? @map("updated_by_user_id")
+  createdBy User? @relation("GrowthCreator", fields: [createdByUserId], references: [id], onDelete: SetNull)
+  updatedBy User? @relation("GrowthUpdater", fields: [updatedByUserId], references: [id], onDelete: SetNull)
 
   batch  CultivationBatch      @relation(fields: [batchId], references: [id], onDelete: Cascade)
   images GrowthProgressImage[]
@@ -280,12 +325,146 @@ model HarvestRecord {
   qualityGrade String?  @map("quality_grade")
   notes        String?  @db.Text
   createdAt    DateTime @default(now()) @map("created_at")
+  createdByUserId Int? @map("created_by_user_id")
+  updatedByUserId Int? @map("updated_by_user_id")
+  createdBy User? @relation("HarvestCreator", fields: [createdByUserId], references: [id], onDelete: SetNull)
+  updatedBy User? @relation("HarvestUpdater", fields: [updatedByUserId], references: [id], onDelete: SetNull)
 
   batch CultivationBatch @relation(fields: [batchId], references: [id], onDelete: Cascade)
 
   @@index([harvestedAt])
   @@index([batchId, harvestedAt])
   @@map("harvest_records")
+}
+
+model TaskSubmission {
+  id String @id @default(uuid()) @db.VarChar(36)
+  taskId String @map("task_id") @db.VarChar(36)
+  submittedByUserId Int? @map("submitted_by_user_id")
+  reviewedByUserId Int? @map("reviewed_by_user_id")
+  status SubmissionStatus @default(PENDING)
+  evidence Json
+  notes String? @db.Text
+  reason String? @db.Text
+  submittedAt DateTime @default(now()) @map("submitted_at")
+  reviewedAt DateTime? @map("reviewed_at")
+  task Task @relation(fields: [taskId], references: [id], onDelete: Restrict)
+  submittedBy User? @relation("SubmissionAuthor", fields: [submittedByUserId], references: [id], onDelete: SetNull)
+  reviewedBy User? @relation("SubmissionReviewer", fields: [reviewedByUserId], references: [id], onDelete: SetNull)
+  images TaskSubmissionImage[]
+
+  @@index([taskId, submittedAt])
+  @@map("task_submissions")
+}
+
+model TaskSubmissionImage {
+  id Int @id @default(autoincrement())
+  submissionId String @map("submission_id") @db.VarChar(36)
+  imageUrl String @map("image_url") @db.VarChar(255)
+  submission TaskSubmission @relation(fields: [submissionId], references: [id], onDelete: Cascade)
+
+  @@index([imageUrl])
+  @@map("task_submission_images")
+}
+
+model BatchExpense {
+  id Int @id @default(autoincrement())
+  batchId Int @map("batch_id")
+  name String @db.VarChar(255)
+  category ExpenseCategory
+  quantity Decimal @db.Decimal(12, 3)
+  unit String @db.VarChar(50)
+  unitPrice Decimal @map("unit_price") @db.Decimal(18, 2)
+  amount Decimal @db.Decimal(18, 2)
+  incurredAt DateTime @map("incurred_at")
+  notes String? @db.Text
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+  createdByUserId Int? @map("created_by_user_id")
+  updatedByUserId Int? @map("updated_by_user_id")
+  createdBy User? @relation("ExpenseCreator", fields: [createdByUserId], references: [id], onDelete: SetNull)
+  updatedBy User? @relation("ExpenseUpdater", fields: [updatedByUserId], references: [id], onDelete: SetNull)
+  batch CultivationBatch @relation(fields: [batchId], references: [id], onDelete: Cascade)
+
+  @@index([batchId, incurredAt])
+  @@index([incurredAt])
+  @@map("batch_expenses")
+}
+
+model BatchSale {
+  id Int @id @default(autoincrement())
+  batchId Int @map("batch_id")
+  quantityKg Decimal @map("quantity_kg") @db.Decimal(12, 3)
+  unitPrice Decimal @map("unit_price") @db.Decimal(18, 2)
+  amount Decimal @db.Decimal(18, 2)
+  soldAt DateTime @map("sold_at")
+  buyer String? @db.VarChar(255)
+  notes String? @db.Text
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+  createdByUserId Int? @map("created_by_user_id")
+  updatedByUserId Int? @map("updated_by_user_id")
+  createdBy User? @relation("SaleCreator", fields: [createdByUserId], references: [id], onDelete: SetNull)
+  updatedBy User? @relation("SaleUpdater", fields: [updatedByUserId], references: [id], onDelete: SetNull)
+  batch CultivationBatch @relation(fields: [batchId], references: [id], onDelete: Cascade)
+
+  @@index([batchId, soldAt])
+  @@index([soldAt])
+  @@map("batch_sales")
+}
+
+model FacilityImage {
+  id Int @id @default(autoincrement())
+  facilityId Int @map("facility_id")
+  imageUrl String @map("image_url") @db.VarChar(255)
+  originalName String @map("original_name") @db.VarChar(255)
+  mimeType String @map("mime_type") @db.VarChar(100)
+  fileSize Int @map("file_size")
+  caption String? @db.VarChar(500)
+  isCover Boolean @default(false) @map("is_cover")
+  uploadedByUserId Int? @map("uploaded_by_user_id")
+  createdAt DateTime @default(now()) @map("created_at")
+  facility ProductionFacility @relation(fields: [facilityId], references: [id], onDelete: Cascade)
+  uploadedBy User? @relation(fields: [uploadedByUserId], references: [id], onDelete: SetNull)
+
+  @@index([facilityId, createdAt])
+  @@map("facility_images")
+}
+
+model MushroomImage {
+  id Int @id @default(autoincrement())
+  mushroomId Int @map("mushroom_id")
+  imageUrl String @map("image_url") @db.VarChar(255)
+  originalName String @map("original_name") @db.VarChar(255)
+  mimeType String @map("mime_type") @db.VarChar(100)
+  fileSize Int @map("file_size")
+  caption String? @db.VarChar(500)
+  isCover Boolean @default(false) @map("is_cover")
+  uploadedByUserId Int? @map("uploaded_by_user_id")
+  createdAt DateTime @default(now()) @map("created_at")
+  mushroom Mushroom @relation(fields: [mushroomId], references: [id], onDelete: Cascade)
+  uploadedBy User? @relation(fields: [uploadedByUserId], references: [id], onDelete: SetNull)
+
+  @@index([mushroomId, createdAt])
+  @@map("mushroom_images")
+}
+
+model BatchImage {
+  id Int @id @default(autoincrement())
+  batchId Int @map("batch_id")
+  imageUrl String @map("image_url") @db.VarChar(255)
+  originalName String @map("original_name") @db.VarChar(255)
+  mimeType String @map("mime_type") @db.VarChar(100)
+  fileSize Int @map("file_size")
+  caption String? @db.VarChar(500)
+  isCover Boolean @default(false) @map("is_cover")
+  uploadedByUserId Int? @map("uploaded_by_user_id")
+  createdAt DateTime @default(now()) @map("created_at")
+  batch CultivationBatch @relation(fields: [batchId], references: [id], onDelete: Cascade)
+  uploadedBy User? @relation(fields: [uploadedByUserId], references: [id], onDelete: SetNull)
+
+  @@index([batchId, createdAt])
+  @@map("batch_images")
 }
 
 model ClassifierLookup {

@@ -3,6 +3,10 @@ const router = express.Router();
 
 const { authenticateToken, authorizeRoles } = require('../middlewares/auth');
 const prisma = global.prisma;
+const { createGalleryRouter } = require('./gallery');
+const { galleryInclude, withGallery, removeStoredMedia } = require('../services/gallery');
+router.use(createGalleryRouter('productionFacility', 'facilityImage', 'facilityId'));
+const allowedFields = ['name', 'taxCode', 'address', 'province', 'contactPhone', 'contactEmail', 'facilityType', 'capacityTonsPerYear', 'totalAreaSqm', 'certifications', 'status', 'mushrooms'];
 
 const allRoles = ['admin', 'manager', 'staff'];
 const managerAndAdmin = ['admin', 'manager'];
@@ -30,6 +34,7 @@ router.get('/', authenticateToken, authorizeRoles(...allRoles), async (req, res)
             skip,
             take: limit,
             include: {
+                ...galleryInclude,
                 mushrooms: {
                     select: {
                         id: true,
@@ -42,7 +47,7 @@ router.get('/', authenticateToken, authorizeRoles(...allRoles), async (req, res)
         });
 
         res.json({
-            data: facilities,
+            data: facilities.map(withGallery),
             pagination: {
                 totalItems,
                 currentPage: page,
@@ -62,12 +67,12 @@ router.get('/:id', authenticateToken, authorizeRoles(...allRoles), async (req, r
         const id = parseInt(req.params.id);
         const facility = await prisma.productionFacility.findUnique({
             where: { id },
-            include: { mushrooms: true }
+            include: { mushrooms: true, ...galleryInclude }
         });
 
         if (!facility) return res.status(404).json({ message: 'Không tìm thấy cơ sở sản xuất' });
 
-        res.json({ data: facility });
+        res.json({ data: withGallery(facility) });
     } catch (error) {
         console.error(error);
         res.status(500).json({ message: 'Lỗi máy chủ' });
@@ -77,6 +82,7 @@ router.get('/:id', authenticateToken, authorizeRoles(...allRoles), async (req, r
 // 3. POST / - Thêm cơ sở sản xuất mới
 router.post('/', authenticateToken, authorizeRoles(...managerAndAdmin), async (req, res) => {
     try {
+        if (!req.body || Object.keys(req.body).some((field) => !allowedFields.includes(field))) return res.status(400).json({ message: 'Dữ liệu cơ sở không hợp lệ' });
         const { mushrooms, ...facilityData } = req.body;
         
         // Cấu trúc connect cho mushrooms nếu frontend truyền mảng các ID nấm [1, 2, 3]
@@ -105,6 +111,7 @@ router.post('/', authenticateToken, authorizeRoles(...managerAndAdmin), async (r
 // 4. PUT /:id - Cập nhật thông tin cơ sở
 router.put('/:id', authenticateToken, authorizeRoles(...managerAndAdmin), async (req, res) => {
     try {
+        if (!req.body || Object.keys(req.body).some((field) => !allowedFields.includes(field))) return res.status(400).json({ message: 'Dữ liệu cơ sở không hợp lệ' });
         const id = parseInt(req.params.id);
         const { mushrooms, ...facilityData } = req.body;
 
@@ -136,9 +143,10 @@ router.put('/:id', authenticateToken, authorizeRoles(...managerAndAdmin), async 
 router.delete('/:id', authenticateToken, authorizeRoles(...managerAndAdmin), async (req, res) => {
     try {
         const id = parseInt(req.params.id);
-        await prisma.productionFacility.delete({
-            where: { id }
+        const deleted = await prisma.productionFacility.delete({
+            where: { id }, include: { images: true }
         });
+        await removeStoredMedia(prisma, deleted.images || []);
         res.json({ message: 'Xóa cơ sở sản xuất thành công' });
     } catch (error) {
         console.error(error);
@@ -147,4 +155,3 @@ router.delete('/:id', authenticateToken, authorizeRoles(...managerAndAdmin), asy
 });
 
 module.exports = router;
-

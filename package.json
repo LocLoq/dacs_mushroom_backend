@@ -1,6 +1,8 @@
 {
   "scripts": {
     "test": "node --test test/*.test.js",
+    "test:db": "node scripts/test-db.cjs",
+    "test:db": "node scripts/test-db.cjs",
     "test:python": "py -3.12 -m unittest discover -s helper/mushroom_classifier/tests -p \"test_*.py\"",
     "test:all": "npm test && npm run test:python",
     "test:coverage": "node --experimental-test-coverage --test test/*.test.js",

@@ -121,6 +121,8 @@ docker compose --env-file .env.docker up -d --wait --wait-timeout 300
 
 Khi cập nhật source hoặc schema, sao lưu dữ liệu trước, rồi tạo lại stack để chắc chắn `db-init` chạy theo schema mới:
 
+Schema mới bao gồm minh chứng/duyệt công việc, tài chính theo lô và gallery. `db-init` dùng Prisma để cập nhật schema; không chạy thêm `sql/workflow_finance_gallery.sql` sau bước này. Giữ database và volume upload đồng bộ khi sao lưu/phục hồi: ảnh trong hồ sơ minh chứng vẫn cần được giữ. Flutter cũ dùng PATCH `COMPLETED` cần cập nhật sang API gửi minh chứng và duyệt.
+
 ```powershell
 docker compose --env-file .env.docker down
 docker compose --env-file .env.docker up -d --build --wait --wait-timeout 300

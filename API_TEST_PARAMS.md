@@ -58,7 +58,7 @@ PATCH /api/dashboard/tasks/<task-uuid>
 DELETE /api/dashboard/tasks/<task-uuid>
 ```
 
-Admin và manager tạo, giao, sửa, hủy/mở lại hoặc xóa công việc. Staff xem danh sách và chỉ đổi trạng thái việc đang mở được giao cho chính mình. `status` là `TODO`, `IN_PROGRESS`, `COMPLETED` hoặc `CANCELLED`; nếu không truyền status khi liệt kê thì chỉ trả `TODO` và `IN_PROGRESS`.
+Admin và manager tạo, giao, sửa, hủy/mở lại hoặc xóa công việc chưa có lịch sử minh chứng. Staff chỉ PATCH `TODO`/`IN_PROGRESS` cho việc đang mở được giao cho chính mình; hoàn thành phải gửi minh chứng và được duyệt. `status` gồm `TODO`, `IN_PROGRESS`, `PENDING_REVIEW`, `COMPLETED`, `CANCELLED`; danh sách mặc định gồm `TODO`, `IN_PROGRESS`, `PENDING_REVIEW`.
 
 ```json
 {
@@ -235,3 +235,42 @@ GET /api/public/cultivation-batches/DEMO-BATCH-001/growth-progress/current
 ```
 
 Các batch code demo: `DEMO-BATCH-001` đến `DEMO-BATCH-100`.
+
+## Minh chứng và duyệt việc
+
+Manager tạo task gắn lô và giao cho ID tài khoản `demo_staff` lấy từ `GET /api/dashboard/task-assignees`. Đăng nhập staff, tạo nhật ký sinh trưởng trên lô đó; dùng ID bản ghi thực tế trong response:
+
+```http
+GET /api/dashboard/tasks/{taskId}/evidence-candidates?type=GROWTH_PROGRESS
+POST /api/dashboard/tasks/{taskId}/submissions
+```
+
+```json
+{ "evidence": [{ "type": "GROWTH_PROGRESS", "recordId": 1441 }], "notes": "Đã kiểm tra lô" }
+```
+
+Đăng nhập manager, dùng `submissionId` từ response để gọi `POST /api/dashboard/tasks/{taskId}/submissions/{submissionId}/review`:
+
+```json
+{ "decision": "APPROVE" }
+```
+
+Để thử trả lại: `{ "decision": "REJECT", "reason": "Bổ sung ảnh" }`. Chỉ duyệt lần gửi còn `PENDING`. Các ID trong ví dụ là minh họa; lấy ID từ API. Nhật ký demo được seed mới có tác giả `demo_staff`; bản ghi cũ chưa có tác giả không đủ điều kiện làm minh chứng.
+
+## Tài chính và gallery
+
+Manager gọi `POST /api/cultivation-batches/66/expenses`:
+
+```json
+{ "name": "Phân bón", "category": "FERTILIZER", "quantity": "2.500", "unit": "kg", "unitPrice": "100000.00" }
+```
+
+Manager gọi `POST /api/cultivation-batches/66/sales`:
+
+```json
+{ "quantityKg": "12.500", "unitPrice": "80000.00", "buyer": "Khách A" }
+```
+
+Xem `GET /api/cultivation-batches/66/financial-summary`, `GET /api/reports/financial`, xuất `/api/reports/financial/export?format=xlsx`. Staff phải nhận `403` ở các API tài chính.
+
+Upload gallery bằng manager: POST multipart `images` (1–5 ảnh) và `caption` tùy chọn tới `/api/production-facilities/1/images`, `/api/mushroom-species/1/images`, `/api/cultivation-batches/66/images`. Chọn ảnh bìa bằng PATCH `.../images/{imageId}` với `{ "isCover": true }`. Staff được GET nhưng không upload/sửa/xóa.

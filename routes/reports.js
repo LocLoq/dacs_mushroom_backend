@@ -5,10 +5,11 @@ const pdfMake = require('pdfmake');
 
 const { auditAction } = require('../middlewares/audit');
 const { authenticateToken, authorizeRoles } = require('../middlewares/auth');
+const { financialSummary, financialSeries } = require('../services/financials');
 
 const router = express.Router();
 const prisma = global.prisma;
-const allowedTypes = new Set(['overview', 'cultivation', 'classifier', 'audit']);
+const allowedTypes = new Set(['overview', 'cultivation', 'classifier', 'audit', 'financial']);
 const allowedStatuses = new Set(['PREPARATION', 'INCUBATION', 'FRUITING', 'HARVESTING', 'COMPLETED', 'FAILED']);
 const pdfFontDirectory = path.join(__dirname, '..', 'node_modules', 'pdfmake', 'fonts', 'Roboto');
 
@@ -39,7 +40,8 @@ const toDate = (value, endOfDay = false) => {
 
 const getFilters = (query) => {
     const now = new Date();
-    const defaultFrom = new Date(now.getFullYear(), 0, 1);
+    const vietnamYear = new Date(now.getTime() + 7 * 3600000).getUTCFullYear();
+    const defaultFrom = new Date(`${vietnamYear}-01-01T00:00:00.000+07:00`);
     const parsedFrom = toDate(query.from);
     const parsedTo = toDate(query.to, true);
     const from = parsedFrom === undefined ? defaultFrom : parsedFrom;
@@ -114,6 +116,38 @@ const getClassifierRows = async (filters, skip = 0, take = 20) => prisma.classif
     select: { id: true, originalName: true, status: true, predictedName: true, edibility: true, confidence: true, errorMessage: true, createdAt: true, completedAt: true, user: { select: { username: true } } }
 });
 
+const financialBatchWhere = (filters) => ({
+    ...(filters.facilityId ? { facilityId: filters.facilityId } : {}),
+    ...(filters.mushroomId ? { mushroomId: filters.mushroomId } : {}),
+    ...(filters.status ? { status: filters.status } : {})
+});
+
+const getFinancialRows = async (filters, skip = 0, take = 20) => {
+    const period = { gte: filters.from, lte: filters.to };
+    const rows = await prisma.cultivationBatch.findMany({
+        where: financialBatchWhere(filters), skip, take, orderBy: [{ startDate: 'desc' }, { id: 'desc' }],
+        select: {
+            id: true, batchCode: true, status: true,
+            facility: { select: { name: true } }, mushroom: { select: { commonName: true } },
+            sales: { where: { soldAt: period }, select: { amount: true, quantityKg: true, soldAt: true } },
+            expenses: { where: { incurredAt: period }, select: { amount: true, category: true, incurredAt: true } },
+            harvestRecords: { where: { harvestedAt: period }, select: { totalYieldKg: true } }
+        }
+    });
+    return rows.map((row) => ({ batchId: row.id, batchCode: row.batchCode, status: row.status, facility: row.facility.name, mushroom: row.mushroom.commonName, ...financialSummary(row.sales, row.expenses, row.harvestRecords), series: financialSeries(row.sales, row.expenses, filters.groupBy) }));
+};
+
+const getFinancialOverview = async (filters) => {
+    const period = { gte: filters.from, lte: filters.to };
+    const batch = financialBatchWhere(filters);
+    const [sales, expenses, harvests] = await Promise.all([
+        prisma.batchSale.findMany({ where: { batch, soldAt: period }, select: { amount: true, quantityKg: true, soldAt: true } }),
+        prisma.batchExpense.findMany({ where: { batch, incurredAt: period }, select: { amount: true, category: true, incurredAt: true } }),
+        prisma.harvestRecord.findMany({ where: { batch, harvestedAt: period }, select: { totalYieldKg: true } })
+    ]);
+    return { summary: financialSummary(sales, expenses, harvests), series: financialSeries(sales, expenses, filters.groupBy) };
+};
+
 const getAuditRows = async (filters, skip = 0, take = 20) => prisma.auditLog.findMany({
     where: { createdAt: { gte: filters.from, lte: filters.to } }, skip, take, orderBy: { createdAt: 'desc' },
     select: { actorUsername: true, actorRole: true, action: true, entityType: true, entityId: true, method: true, path: true, statusCode: true, outcome: true, durationMs: true, createdAt: true }
@@ -148,6 +182,19 @@ const getOverview = async (filters) => {
 };
 
 const reportHandler = (action, handler) => [auditAction(action, { entityType: 'Report' }), authenticateToken, authorizeRoles(...global.privilegedRoles), handler];
+
+router.get('/financial', ...reportHandler('REPORT_FINANCIAL_VIEW', async (req, res) => {
+    const filters = getFilters(req.query);
+    if (filters.error) return res.status(400).json({ message: filters.error });
+    try {
+        const [totalItems, data, overview] = await Promise.all([
+            prisma.cultivationBatch.count({ where: financialBatchWhere(filters) }),
+            getFinancialRows(filters, (filters.page - 1) * filters.limit, filters.limit),
+            getFinancialOverview(filters)
+        ]);
+        res.json({ data, ...overview, period: { from: filters.from, to: filters.to, groupBy: filters.groupBy }, pagination: { totalItems, currentPage: filters.page, totalPages: Math.ceil(totalItems / filters.limit), pageSize: filters.limit } });
+    } catch (error) { console.error(error); res.status(500).json({ message: 'Lỗi máy chủ' }); }
+}));
 
 router.get('/overview', ...reportHandler('REPORT_OVERVIEW_VIEW', async (req, res) => {
     const filters = getFilters(req.query);
@@ -185,6 +232,7 @@ router.get('/audit', ...reportHandler('REPORT_AUDIT_VIEW', async (req, res) => {
 }));
 
 const columnsFor = (type) => ({
+    financial: [['Mã lô', 'batchCode'], ['Cơ sở', 'facility'], ['Nấm', 'mushroom'], ['Trạng thái', 'status'], ['Tiền tệ', 'currency'], ['Thu hoạch (kg)', 'totalHarvestKg'], ['Đã bán (kg)', 'totalSoldKg'], ['Doanh thu', 'revenue'], ['Tổng chi phí', 'totalCost'], ['Vật tư', 'costsByCategory.MATERIAL'], ['Dụng cụ', 'costsByCategory.TOOL'], ['Phân bón', 'costsByCategory.FERTILIZER'], ['Khác', 'costsByCategory.OTHER'], ['Lợi nhuận', 'profit'], ['Tỷ suất (%)', 'profitMarginPercent'], ['Chi phí/kg', 'costPerHarvestKg']],
     cultivation: [['Mã lô', 'batchCode'], ['Cơ sở', 'facility'], ['Tỉnh', 'province'], ['Nấm', 'mushroom'], ['Trạng thái', 'status'], ['Bắt đầu', 'startDate'], ['Thu hoạch (kg)', 'totalHarvestKg'], ['Giai đoạn mới nhất', 'latestGrowthStage']],
     classifier: [['ID', 'id'], ['Tệp ảnh', 'originalName'], ['Trạng thái', 'status'], ['Dự đoán', 'predictedName'], ['Độ ăn được', 'edibility'], ['Độ tin cậy', 'confidence'], ['Người gửi', 'user.username'], ['Thời gian', 'createdAt']],
     audit: [['Người thao tác', 'actorUsername'], ['Vai trò', 'actorRole'], ['Hành động', 'action'], ['Đối tượng', 'entityType'], ['ID đối tượng', 'entityId'], ['Method', 'method'], ['HTTP', 'statusCode'], ['Kết quả', 'outcome'], ['Thời gian', 'createdAt']]
@@ -204,7 +252,7 @@ const overviewRows = (overview) => [
 
 const exportRows = async (type, filters, maxRows) => {
     if (type === 'overview') return overviewRows(await getOverview(filters));
-    const getRows = { cultivation: getCultivationRows, classifier: getClassifierRows, audit: getAuditRows }[type];
+    const getRows = { cultivation: getCultivationRows, classifier: getClassifierRows, audit: getAuditRows, financial: getFinancialRows }[type];
     const rows = await getRows(filters, 0, maxRows + 1);
     if (rows.length > maxRows) return null;
     return rows;

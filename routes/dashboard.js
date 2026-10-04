@@ -4,8 +4,9 @@ const { authenticateToken, authorizeRoles } = require('../middlewares/auth');
 const { auditAction } = require('../middlewares/audit');
 
 const prisma = global.prisma;
+router.use(require('./taskSubmissions'));
 const openStatuses = ['TODO', 'IN_PROGRESS'];
-const statuses = new Set([...openStatuses, 'COMPLETED', 'CANCELLED']);
+const statuses = new Set([...openStatuses, 'PENDING_REVIEW', 'COMPLETED', 'CANCELLED']);
 const managerRoles = ['admin', 'manager'];
 const positiveInteger = (value) => {
     if (typeof value === 'number' && Number.isInteger(value) && value > 0) return value;
@@ -20,6 +21,7 @@ const optionalDate = (value) => {
     return Number.isNaN(date.getTime()) ? undefined : date;
 };
 const taskInclude = {
+    submissions: { orderBy: [{ submittedAt: 'desc' }, { id: 'desc' }], take: 1, select: { id: true, status: true, submittedByUserId: true, reviewedByUserId: true, submittedAt: true, reviewedAt: true, reason: true } },
     batch: { select: { batchCode: true } },
     assignee: { select: { id: true, username: true, full_name: true, role: { select: { name: true } } } }
 };
@@ -49,7 +51,7 @@ router.get('/tasks', authenticateToken, authorizeRoles(...global.allRoles), asyn
         ...(req.query.search ? { title: { contains: String(req.query.search).trim() } } : {}),
         ...(batchId ? { batchId } : {}),
         ...(assigneeUserId ? { assigneeUserId } : {}),
-        ...(requestedStatus === undefined ? { status: { in: openStatuses } } : requestedStatus === 'ALL' ? {} : { status: requestedStatus })
+        ...(requestedStatus === undefined ? { status: { in: [...openStatuses, 'PENDING_REVIEW'] } } : requestedStatus === 'ALL' ? {} : { status: requestedStatus })
     };
     try {
         const [totalItems, data] = await Promise.all([
@@ -62,7 +64,7 @@ router.get('/tasks', authenticateToken, authorizeRoles(...global.allRoles), asyn
 
 router.get('/tasks/:id', authenticateToken, authorizeRoles(...global.allRoles), async (req, res) => {
     try {
-        const task = await prisma.task.findUnique({ where: { id: req.params.id }, include: taskInclude });
+        const task = await prisma.task.findUnique({ where: { id: req.params.id }, include: { ...taskInclude, submissions: { orderBy: [{ submittedAt: 'desc' }, { id: 'desc' }] } } });
         if (!task) return res.status(404).json({ message: 'Không tìm thấy công việc' });
         res.json({ data: serializeTask(task) });
     } catch (error) { console.error(error); res.status(500).json({ message: 'Lỗi máy chủ' }); }
@@ -111,7 +113,9 @@ router.patch('/tasks/:id', auditAction('TASK_UPDATE', { entityType: 'Task', enti
         const task = await prisma.task.findUnique({ where: { id: req.params.id } });
         if (!task) return res.status(404).json({ message: 'Không tìm thấy công việc' });
         const manager = managerRoles.includes(req.user.role);
-        if (!manager && (Object.keys(body).some((key) => key !== 'status') || task.assigneeUserId !== req.user.id || !openStatuses.includes(task.status) || !openStatuses.includes(body.status) && body.status !== 'COMPLETED')) return res.status(403).json({ code: 'AUTH_FORBIDDEN', message: 'Bạn không có quyền cập nhật công việc này' });
+        if (!manager && (Object.keys(body).some((key) => key !== 'status') || task.assigneeUserId !== req.user.id || !openStatuses.includes(task.status) || !openStatuses.includes(body.status))) return res.status(403).json({ code: 'AUTH_FORBIDDEN', message: 'Bạn không có quyền cập nhật công việc này' });
+        if (['COMPLETED', 'PENDING_REVIEW'].includes(body.status)) return res.status(400).json({ message: 'Phải gửi minh chứng và duyệt qua API chuyên dụng' });
+        if (task.status === 'PENDING_REVIEW' && (Object.keys(body).some((key) => ['batchId', 'assigneeUserId'].includes(key)) || body.status && body.status !== 'CANCELLED')) return res.status(409).json({ code: 'STATE_CONFLICT', message: 'Hãy duyệt, trả lại hoặc hủy việc trước khi đổi liên kết/trạng thái' });
         const update = {};
         if ('title' in body) { if (typeof body.title !== 'string' || !body.title.trim() || body.title.trim().length > 255) return res.status(400).json({ message: 'Tiêu đề không hợp lệ' }); update.title = body.title.trim(); }
         if ('description' in body) { if (body.description !== null && typeof body.description !== 'string') return res.status(400).json({ message: 'Mô tả không hợp lệ' }); update.description = body.description?.trim() || null; }
@@ -120,16 +124,23 @@ router.patch('/tasks/:id', auditAction('TASK_UPDATE', { entityType: 'Task', enti
         if ('status' in body) { if (!statuses.has(body.status)) return res.status(400).json({ message: 'Trạng thái công việc không hợp lệ' }); update.status = body.status; }
         const problem = await validateReferences(update.batchId, update.assigneeUserId);
         if (problem) return res.status(400).json({ message: problem });
-        const updated = await prisma.task.update({ where: { id: task.id }, data: update, include: taskInclude });
+        const updated = await prisma.$transaction(async (tx) => {
+            const result = await tx.task.update({ where: { id: task.id, version: task.version }, data: { ...update, version: { increment: 1 } }, include: taskInclude });
+            if (task.status === 'PENDING_REVIEW' && body.status === 'CANCELLED') {
+                await tx.taskSubmission.updateMany({ where: { taskId: task.id, status: 'PENDING' }, data: { status: 'CANCELLED' } });
+                return tx.task.findUnique({ where: { id: task.id }, include: taskInclude });
+            }
+            return result;
+        });
         res.json({ message: 'Cập nhật công việc thành công', data: serializeTask(updated) });
-    } catch (error) { console.error(error); res.status(500).json({ message: 'Lỗi máy chủ' }); }
+    } catch (error) { if (['P2025', 'P2034'].includes(error.code)) return res.status(409).json({ code: 'STATE_CONFLICT', message: 'Công việc đã thay đổi; vui lòng tải lại' }); console.error(error); res.status(500).json({ message: 'Lỗi máy chủ' }); }
 });
 
 router.delete('/tasks/:id', auditAction('TASK_DELETE', { entityType: 'Task', entityId: (req) => req.params.id }), authenticateToken, authorizeRoles(...managerRoles), async (req, res) => {
     try {
         await prisma.task.delete({ where: { id: req.params.id } });
         res.json({ message: 'Xóa công việc thành công' });
-    } catch (error) { res.status(404).json({ message: 'Không tìm thấy công việc' }); }
+    } catch (error) { if (error.code === 'P2003') return res.status(409).json({ code: 'STATE_CONFLICT', message: 'Công việc đã có lịch sử minh chứng; hãy hủy thay vì xóa' }); res.status(error.code === 'P2025' ? 404 : 500).json({ message: error.code === 'P2025' ? 'Không tìm thấy công việc' : 'Lỗi máy chủ' }); }
 });
 
 module.exports = router;

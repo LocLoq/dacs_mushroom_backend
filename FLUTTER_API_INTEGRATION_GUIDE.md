@@ -2,7 +2,7 @@
 
 ## 1. Mục tiêu và nguồn sự thật
 
-Tích hợp ứng dụng Flutter với backend quản lý nuôi trồng nấm, classifier, báo cáo, audit log và tiến trình sinh trưởng công khai.
+Tích hợp ứng dụng Flutter với backend quản lý nuôi trồng nấm, công việc có minh chứng/duyệt, tài chính theo lô, gallery, classifier, báo cáo, audit log và tiến trình sinh trưởng công khai.
 
 Nguồn sự thật của contract API:
 
@@ -77,9 +77,39 @@ Web client phải được thêm vào biến môi trường backend `CORS_ALLOWE
 
 ## Dashboard công việc
 
-Gọi `GET /dashboard/tasks` cho cả ba role. Mặc định response phân trang chỉ gồm `TODO` và `IN_PROGRESS`, sắp xếp theo hạn gần nhất; dùng `status=ALL` để xem lịch sử. Mỗi item có `batchCode` và `assignee` có thể `null` khi chưa liên kết/giao việc.
+Gọi `GET /dashboard/tasks` cho cả ba role. Mặc định response phân trang gồm `TODO`, `IN_PROGRESS`, `PENDING_REVIEW`, sắp xếp theo hạn gần nhất; dùng `status=ALL` để xem lịch sử. Mỗi item có `batchCode` và `assignee` có thể `null` khi chưa liên kết/giao việc. Danh sách trả `submissions` gồm tối đa một lần gửi gần nhất (bản tóm tắt); `GET /dashboard/tasks/{id}` trả toàn bộ lịch sử kèm snapshot `evidence` và `notes`. Không dùng response list để hiển thị nội dung minh chứng.
 
-Admin và manager gọi `POST /dashboard/tasks`, `PATCH /dashboard/tasks/:id`, `DELETE /dashboard/tasks/:id` và `GET /dashboard/task-assignees`. Staff chỉ PATCH `{ "status": "TODO" | "IN_PROGRESS" | "COMPLETED" }` cho việc mở đang được giao cho mình. Không hiển thị thao tác hủy/mở lại/xóa cho staff.
+Admin và manager gọi `POST /dashboard/tasks`, `PATCH /dashboard/tasks/:id`, `DELETE /dashboard/tasks/:id` và `GET /dashboard/task-assignees`. Staff chỉ PATCH `{ "status": "TODO" | "IN_PROGRESS" }` cho việc mở đang được giao cho mình. Không PATCH trực tiếp sang `COMPLETED` hoặc `PENDING_REVIEW` với bất kỳ role nào. Việc đã có lịch sử minh chứng không xóa được (`409`); manager/admin dùng hủy và có thể mở lại bằng `IN_PROGRESS`.
+
+Luồng UI hoàn thành công việc:
+
+1. Người được giao tạo/cập nhật nhật ký chăm sóc, sinh trưởng hoặc thu hoạch qua API hiện có. Backend tự gán `createdByUserId`/`updatedByUserId`; không gửi hai field này từ Flutter.
+2. Gọi `GET /dashboard/tasks/{id}/evidence-candidates?page=1&limit=10&type=GROWTH_PROGRESS`. `type` tùy chọn: `CARE_LOG`, `GROWTH_PROGRESS`, `HARVEST`. Các item `{ type, recordId, record }` đã được backend lọc theo người thực hiện và lô của task. Chỉ người được giao được gọi API này.
+3. Cho người dùng chọn ít nhất một hành động, tối đa 20, rồi gọi API gửi minh chứng:
+
+```dart
+await api.post('/dashboard/tasks/$taskId/submissions', data: {
+  'evidence': selectedEvidence.map((item) => {
+    'type': item.type,
+    'recordId': item.recordId,
+  }).toList(),
+  'notes': submissionNotes,
+});
+```
+
+4. Refresh task. Hiển thị `PENDING_REVIEW` là “Chờ duyệt”; khóa nút gửi lại. Chưa tính vào số việc hoàn thành.
+5. Manager/admin xem chi tiết và snapshot của lần gửi `PENDING`. Hiển thị “Duyệt” và “Trả lại”; ẩn cả hai nếu `submittedByUserId` bằng ID tài khoản hiện tại. Duyệt gọi:
+
+```dart
+await api.post(
+  '/dashboard/tasks/$taskId/submissions/$submissionId/review',
+  data: {'decision': 'APPROVE'},
+);
+```
+
+6. Trả lại gửi `{ 'decision': 'REJECT', 'reason': reason }`, yêu cầu lý do không rỗng. Task về `IN_PROGRESS`; hiển thị lý do, cho nhân viên bổ sung nhật ký và gửi lần mới. Chỉ `COMPLETED` được tính hoàn thành.
+
+Không cho manager/admin đổi lô hoặc người nhận khi task đang chờ duyệt; dùng trả lại hoặc hủy trước. Khi nhận `409 STATE_CONFLICT`, tải lại chi tiết và thông báo trạng thái đã thay đổi; không tự động gửi lại quyết định cũ. Giữ lịch sử `PENDING`, `APPROVED`, `REJECTED`, `CANCELLED`; đọc minh chứng từ snapshot trong submission để hiển thị đúng nội dung đã gửi.
 
 ## 4. Cấu trúc Flutter đề xuất
 
@@ -297,6 +327,8 @@ DELETE /api/cultivation-batches/{id}
 
 ### Nhật ký chăm sóc
 
+Khi tạo/PUT cơ sở, giống nấm hoặc lô, chỉ gửi các field nghiệp vụ của form. Không gửi lại toàn bộ JSON detail: `id`, timestamps, `coverImageUrl`, `imageCount` và các quan hệ gallery/tài chính/công việc không phải field ghi qua API CRUD này.
+
 ```text
 GET  /api/cultivation-batches/{id}/care-logs
 POST /api/cultivation-batches/{id}/care-logs
@@ -458,6 +490,7 @@ Chỉ admin/manager:
 ```text
 GET /api/reports/overview
 GET /api/reports/cultivation
+GET /api/reports/financial
 GET /api/reports/classifier
 GET /api/reports/audit
 GET /api/reports/{type}/export
@@ -479,7 +512,7 @@ Query dùng chung:
 Export:
 
 ```text
-type: overview | cultivation | classifier | audit
+type: overview | cultivation | classifier | audit | financial
 format: csv | xlsx | pdf
 ```
 
@@ -539,11 +572,14 @@ Frontend chỉ đọc audit log; không xây chức năng sửa hoặc xóa.
 
 - [ ] Tạo API client chung với base URL từ `dart-define`.
 - [ ] Thêm secure token storage và Authorization interceptor.
-- [ ] Mapping thống nhất lỗi `400/401/403/404/422/500/503`.
+- [ ] Mapping thống nhất lỗi `400/401/403/404/409/422/500/503`.
 - [ ] Tạo model nullable-safe theo response Swagger.
 - [ ] Tạo auth state và điều hướng theo role.
 - [ ] Tích hợp CRUD user, mushroom, facility và batch.
 - [ ] Tích hợp care logs, harvests và growth progress multipart.
+- [ ] Tích hợp chọn minh chứng, gửi chờ duyệt, duyệt/trả lại và lịch sử snapshot; không hoàn thành task qua PATCH.
+- [ ] Tích hợp chi phí, bán hàng và lời/lỗ chỉ dành cho manager/admin; giữ tiền dưới dạng chuỗi.
+- [ ] Tích hợp gallery của cơ sở/giống/lô, ảnh bìa và quyền manager/admin quản lý.
 - [ ] Resolve chính xác URL `/uploads/...`.
 - [ ] Tích hợp classifier upload và Socket.IO reconnect/resubscribe.
 - [ ] Tích hợp reports JSON, filter, pagination và export bytes.
@@ -569,3 +605,93 @@ reportTo: 2026-09-23
 ```
 
 Các batch code demo chạy từ `DEMO-BATCH-001` đến `DEMO-BATCH-100`.
+
+## 17. Tài chính trong chi tiết lô
+
+Chỉ tạo tab tài chính và nút nhập chi phí/bán hàng cho `manager`/`admin`. Staff vẫn ghi thu hoạch bình thường. Contract đầy đủ và ví dụ response nằm trong [NEW_API_DOCUMENTATION.md](NEW_API_DOCUMENTATION.md#7-chi-phí-bán-hàng-và-lờilỗ).
+
+```text
+GET/POST     /cultivation-batches/{id}/expenses
+PATCH/DELETE /cultivation-batches/{id}/expenses/{expenseId}
+GET/POST     /cultivation-batches/{id}/sales
+PATCH/DELETE /cultivation-batches/{id}/sales/{saleId}
+GET          /cultivation-batches/{id}/financial-summary
+```
+
+GET expenses/sales dùng `page`, `limit` (mặc định 10, tối đa 50), response `{data,pagination}`. Tạo trả `201`, sửa trả `200`, `{message,data}`; xóa trả `{message}`. Sửa chỉ gửi các field thay đổi. Tạo khoản chi:
+
+```dart
+await api.post('/cultivation-batches/$batchId/expenses', data: {
+  'name': 'Phân bón đợt 1',
+  'category': 'FERTILIZER',
+  'quantity': '2.500',
+  'unit': 'kg',
+  'unitPrice': '100000.00',
+  'incurredAt': selectedDate.toUtc().toIso8601String(),
+  'notes': expenseNotes,
+});
+```
+
+Nhóm chi phí hiển thị: `MATERIAL` → Vật tư, `TOOL` → Dụng cụ, `FERTILIZER` → Phân bón, `OTHER` → Khác. Tạo lần bán:
+
+```dart
+await api.post('/cultivation-batches/$batchId/sales', data: {
+  'quantityKg': '12.500',
+  'unitPrice': '80000.00',
+  'soldAt': selectedDate.toUtc().toIso8601String(),
+  'buyer': buyerName,
+  'notes': saleNotes,
+});
+```
+
+Giữ `unitPrice`, `amount`, các chỉ số tiền dưới dạng `String` trong DTO; số lượng của expense/sale cũng trả chuỗi Decimal. Đừng ép DTO tiền thành `int`/`double` hoặc tự nhân tiền để thay số backend. Gửi chuỗi thập phân có dấu chấm, không có dấu phân nhóm hoặc ký hiệu ₫. Backend yêu cầu số lượng dương, tối đa 3 chữ số thập phân; đơn giá không âm, tối đa 2 chữ số. Không gửi `amount`, `batchId` trong body hay metadata người tạo/người sửa.
+
+`financial-summary` trả `{data:{batchId,currency,totalHarvestKg,totalSoldKg,revenue,totalCost,profit,costsByCategory,profitMarginPercent,costPerHarvestKg}}`. Hai tổng kg là JSON number; tiền/tỷ suất/chi phí mỗi kg là chuỗi, hai chỉ số chia có thể null. Hiển thị null bằng “Chưa có dữ liệu”, lợi nhuận âm là lỗ. Summary dùng toàn bộ vòng đời lô và tổng các nhật ký thu hoạch. Refresh sau mọi tạo/sửa/xóa chi phí, lần bán hoặc thu hoạch.
+
+`GET /reports/financial` dùng các filter báo cáo hiện có, trả `{data,summary,series,period,pagination}`. Tổng/biểu đồ cấp báo cáo tính toàn bộ filter; không cộng các dòng của trang hiện tại. Series gồm `{period,revenue,totalCost,profit}`; nhóm ngày/tháng theo UTC+7. Báo cáo theo ngày bán/ngày chi/ngày thu hoạch trong kỳ, có thể gồm lô bắt đầu trước kỳ; không so trực tiếp tổng theo kỳ với summary toàn vòng đời. Export dùng `type=financial`, `format=csv|xlsx|pdf`.
+
+Phiên bản này tính lời/lỗ từ lần bán và khoản chi đã ghi, chưa quản lý tồn kho, công nợ, thuế hoặc khấu hao.
+
+## 18. Gallery cơ sở, giống nấm và lô
+
+List/detail của ba resource trả thêm `coverImageUrl: String?`, `imageCount: int`. Có thêm `GET /mushroom-species/{id}`. Dùng ảnh bìa cho thẻ danh sách; gọi API gallery khi mở chi tiết, không cần tải toàn bộ ảnh cho mỗi thẻ.
+
+```text
+GET/POST     /production-facilities/{id}/images
+PATCH/DELETE /production-facilities/{id}/images/{imageId}
+GET/POST     /mushroom-species/{id}/images
+PATCH/DELETE /mushroom-species/{id}/images/{imageId}
+GET/POST     /cultivation-batches/{id}/images
+PATCH/DELETE /cultivation-batches/{id}/images/{imageId}
+```
+
+Mọi role xem gallery. Chỉ manager/admin thấy nút tải ảnh, sửa chú thích, chọn bìa và xóa. GET phân trang với `page`, `limit` tối đa 50; thứ tự ảnh bìa trước, sau đó thời gian tải/ID tăng dần. DTO ảnh: `id`, khóa đối tượng tương ứng, `imageUrl`, `originalName`, `mimeType`, `fileSize`, `caption: String?`, `isCover: bool`, `uploadedByUserId: int?`, `createdAt`.
+
+Upload bằng Dio, `resource` là một trong ba tên resource trên:
+
+```dart
+final form = FormData();
+form.fields.add(MapEntry('caption', caption));
+for (final filePath in selectedFilePaths) {
+  form.files.add(MapEntry(
+    'images',
+    await MultipartFile.fromFile(filePath),
+  ));
+}
+await api.post('/$resource/$entityId/images', data: form);
+```
+
+Kiểm tra 1–5 ảnh/lần, JPEG/PNG/WebP, mỗi ảnh tối đa 5 MB, chú thích tối đa 500 ký tự. POST trả `{message,data:[GalleryImage]}`. Hiển thị bằng `Image.network(ApiConfig.absoluteMediaUrl(image.imageUrl))`; mở ảnh lớn khi người dùng chọn thumbnail.
+
+Chọn bìa bằng PATCH `{ 'isCover': true }`; sửa chú thích bằng PATCH `{ 'caption': value }`, dùng null để xóa chú thích. Không gửi `isCover: false`. Ảnh đầu tiên tự làm bìa; khi xóa bìa backend chọn ảnh còn lại cũ nhất. Sau mutation refresh gallery và list/detail để cập nhật bìa/số ảnh. Gallery rỗng hiển thị placeholder; giống nấm có thể trả `imageUrl` cũ làm bìa dự phòng.
+
+Ảnh gallery lô và ảnh nhật ký sinh trưởng là hai danh sách riêng. Ảnh đính kèm nhật ký vẫn được xem trong tiến trình và snapshot minh chứng.
+
+## 19. Kiểm thử Flutter cho chức năng mới
+
+- Staff ghi nhật ký, chọn minh chứng cùng lô, gửi và thấy “Chờ duyệt”; chỉ hoàn thành sau khi quản lý duyệt.
+- Trả lại có lý do, bổ sung và gửi lần mới; lịch sử lần cũ hiển thị nội dung snapshot ban đầu.
+- Ẩn tự duyệt và nút sai quyền; xử lý `409` bằng refresh, không tự gửi lại.
+- DTO tiền nhận chuỗi, lợi nhuận âm và chỉ số null; summary cập nhật sau sửa/xóa khoản chi/lần bán.
+- Report theo kỳ không cộng trang hiện tại để làm tổng; tải file financial dạng bytes.
+- Upload và quản lý bìa ở cả ba gallery; kiểm tra lỗi vượt giới hạn và URL ảnh tương đối.

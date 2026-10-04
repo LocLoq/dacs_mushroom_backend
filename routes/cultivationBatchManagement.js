@@ -7,6 +7,10 @@ const router = express.Router();
 
 const { authenticateToken, authorizeRoles } = require('../middlewares/auth');
 const prisma = global.prisma;
+const { createGalleryRouter } = require('./gallery');
+const { galleryInclude, withGallery, removeStoredMedia } = require('../services/gallery');
+router.use(require('./batchFinancials'));
+router.use(createGalleryRouter('cultivationBatch', 'batchImage', 'batchId'));
 
 const validDate = (value) => {
     if (typeof value !== 'string' || !value.trim()) return null;
@@ -19,6 +23,8 @@ const finiteNumber = (value) => {
     return null;
 };
 const validateBatchData = (data) => {
+    const allowed = ['batchCode', 'facilityId', 'mushroomId', 'status', 'substrateType', 'spawnSource', 'bagQuantity', 'startDate', 'expectedHarvestDate', 'endDate', 'actualYieldKg', 'defectRate', 'notes'];
+    if (!data || typeof data !== 'object' || Array.isArray(data) || Object.keys(data).some((field) => !allowed.includes(field))) return 'Chỉ được cập nhật thông tin lô, không được cập nhật quan hệ hoặc metadata';
     for (const field of ['startDate', 'expectedHarvestDate', 'endDate']) if (data[field] !== undefined && data[field] !== null) {
         const parsed = validDate(data[field]);
         if (!parsed) return `${field} không hợp lệ`;
@@ -112,6 +118,7 @@ router.get('/', authenticateToken, authorizeRoles(...global.allRoles), async (re
             skip,
             take: limit,
             include: {
+                ...galleryInclude,
                 facility: {
                     select: { id: true, name: true, facilityType: true }
                 },
@@ -123,7 +130,7 @@ router.get('/', authenticateToken, authorizeRoles(...global.allRoles), async (re
         });
 
         res.json({
-            data: batches,
+            data: batches.map(withGallery),
             pagination: {
                 totalItems,
                 currentPage: page,
@@ -144,6 +151,7 @@ router.get('/:id', authenticateToken, authorizeRoles(...global.allRoles), async 
         const batch = await prisma.cultivationBatch.findUnique({
             where: { id },
             include: {
+                ...galleryInclude,
                 facility: true,
                 mushroom: true
             }
@@ -151,7 +159,7 @@ router.get('/:id', authenticateToken, authorizeRoles(...global.allRoles), async 
 
         if (!batch) return res.status(404).json({ message: 'Không tìm thấy lô nuôi trồng' });
 
-        res.json({ data: batch });
+        res.json({ data: withGallery(batch) });
     } catch (error) {
         console.error(error);
         res.status(500).json({ message: 'Lỗi máy chủ' });
@@ -216,6 +224,8 @@ router.post('/:id/care-logs', authenticateToken, authorizeRoles(...global.allRol
                 batchId,
                 actionType: actionType.trim(),
                 notes: notes.trim(),
+                createdByUserId: req.user.id,
+                updatedByUserId: req.user.id,
                 recordedAt: parsedRecordedAt
             }
         });
@@ -301,6 +311,8 @@ router.post('/:id/growth-progress', authenticateToken, authorizeRoles(...global.
                 batchId,
                 stage: stage.trim(),
                 notes: notes.trim(),
+                createdByUserId: req.user.id,
+                updatedByUserId: req.user.id,
                 recordedAt: parsedRecordedAt,
                 ...(uploadedFiles.length > 0 && {
                     images: { create: toGrowthProgressImageData(uploadedFiles) }
@@ -342,7 +354,7 @@ router.patch('/:id/growth-progress/:recordId', authenticateToken, authorizeRoles
             return discardGrowthProgressFilesAndRespond(res, uploadedFiles, 400, 'Chỉ được phép cập nhật stage, notes, recordedAt hoặc hình ảnh');
         }
 
-        const updateData = {};
+        const updateData = { updatedByUserId: req.user.id };
 
         if (Object.prototype.hasOwnProperty.call(requestData, 'stage')) {
             if (typeof requestData.stage !== 'string' || !requestData.stage.trim()) {
@@ -432,10 +444,14 @@ router.post('/:id/harvests', authenticateToken, authorizeRoles(...global.allRole
         if (!batch) return res.status(404).json({ message: 'Không tìm thấy lô nuôi trồng' });
 
         const harvest = await prisma.$transaction(async (tx) => {
+            const locked = await tx.cultivationBatch.updateMany({ where: { id: batchId }, data: { updatedAt: new Date() } });
+            if (!locked.count) return null;
             const created = await tx.harvestRecord.create({
                 data: {
                     batchId,
                     totalYieldKg: parsedYield,
+                    createdByUserId: req.user.id,
+                    updatedByUserId: req.user.id,
                     qualityGrade: qualityGrade || null,
                     notes: notes || null,
                     harvestedAt: parsedHarvestedAt
@@ -443,11 +459,12 @@ router.post('/:id/harvests', authenticateToken, authorizeRoles(...global.allRole
             });
 
             if (finalizeBatch) {
+                const totals = await tx.harvestRecord.aggregate({ where: { batchId }, _sum: { totalYieldKg: true } });
                 await tx.cultivationBatch.update({
                     where: { id: batchId },
                     data: {
                         status: 'COMPLETED',
-                        actualYieldKg: parsedYield,
+                        actualYieldKg: totals._sum.totalYieldKg || 0,
                         endDate: new Date()
                     }
                 });
@@ -456,10 +473,12 @@ router.post('/:id/harvests', authenticateToken, authorizeRoles(...global.allRole
             return created;
         });
 
+        if (!harvest) return res.status(404).json({ message: 'Không tìm thấy lô nuôi trồng' });
+
         res.status(201).json({ message: 'Ghi nhận kết quả thu hoạch thành công', data: harvest });
     } catch (error) {
         console.error(error);
-        res.status(400).json({ message: 'Dữ liệu không hợp lệ', error: error.message });
+        res.status(error.code === 'P2034' ? 409 : 400).json({ message: error.code === 'P2034' ? 'Dữ liệu đã thay đổi; vui lòng thử lại' : 'Dữ liệu không hợp lệ' });
     }
 });
 
@@ -488,9 +507,11 @@ router.put('/:id', authenticateToken, authorizeRoles(...global.allRoles), async 
 router.delete('/:id', authenticateToken, authorizeRoles(...global.privilegedRoles), async (req, res) => {
     try {
         const id = parseInt(req.params.id);
-        await prisma.cultivationBatch.delete({
-            where: { id }
+        const deleted = await prisma.cultivationBatch.delete({
+            where: { id },
+            include: { images: true, growthRecords: { include: { images: true } } }
         });
+        await removeStoredMedia(prisma, [...(deleted.images || []), ...(deleted.growthRecords || []).flatMap((record) => record.images)]);
         res.json({ message: 'Xóa lô nuôi trồng thành công' });
     } catch (error) {
         console.error(error);

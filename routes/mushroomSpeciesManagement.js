@@ -6,6 +6,11 @@ const router = express.Router();
 const prisma = global.prisma;
 
 const { authenticateToken, authorizeRoles } = require('../middlewares/auth');
+const { createGalleryRouter } = require('./gallery');
+const { galleryInclude, withGallery, removeStoredMedia } = require('../services/gallery');
+const { handle, id, fields } = require('../services/apiHelpers');
+router.use(createGalleryRouter('mushroom', 'mushroomImage', 'mushroomId'));
+const allowedFields = ['scientificName', 'commonName', 'otherNames', 'family', 'genus', 'capDescription', 'gillsDescription', 'stemDescription', 'sporePrintColor', 'bruisingBehavior', 'ecologyType', 'habitat', 'fruitingSeason', 'edibilityStatus', 'toxicitySymptoms', 'medicinalProperties', 'cultivationDifficulty', 'imageUrl'];
 
 
 // 1. API Tìm kiếm và Lấy danh sách (Cho phép admin, manager, staff)
@@ -30,6 +35,7 @@ router.get('/', authenticateToken, authorizeRoles(...global.allRoles), async (re
 
         const totalItems = await prisma.mushroom.count({ where: whereClause });
         const mushrooms = await prisma.mushroom.findMany({
+            include: galleryInclude,
             where: whereClause,
             skip,
             take: limit,
@@ -37,7 +43,7 @@ router.get('/', authenticateToken, authorizeRoles(...global.allRoles), async (re
         });
 
         res.json({
-            data: mushrooms,
+            data: mushrooms.map(withGallery),
             pagination: {
                 totalItems,
                 currentPage: page,
@@ -51,9 +57,16 @@ router.get('/', authenticateToken, authorizeRoles(...global.allRoles), async (re
     }
 });
 
+router.get('/:id', authenticateToken, authorizeRoles(...global.allRoles), handle(async (req, res) => {
+    const mushroom = await prisma.mushroom.findUnique({ where: { id: id(req.params.id) }, include: galleryInclude });
+    if (!mushroom) return res.status(404).json({ message: 'Không tìm thấy giống nấm' });
+    res.json({ data: withGallery(mushroom) });
+}));
+
 // 2. API Thêm giống nấm mới (Chỉ cho phép admin, manager)
 router.post('/', authenticateToken, authorizeRoles(...global.privilegedRoles), async (req, res) => {
     try {
+        fields(req.body, allowedFields);
         const newMushroom = await prisma.mushroom.create({
             data: req.body
         });
@@ -67,6 +80,7 @@ router.post('/', authenticateToken, authorizeRoles(...global.privilegedRoles), a
 // 3. API Sửa thông tin giống nấm (Chỉ cho phép admin, manager)
 router.put('/:id', authenticateToken, authorizeRoles(...global.privilegedRoles), async (req, res) => {
     try {
+        fields(req.body, allowedFields);
         const id = parseInt(req.params.id);
         const updatedMushroom = await prisma.mushroom.update({
             where: { id },
@@ -83,9 +97,10 @@ router.put('/:id', authenticateToken, authorizeRoles(...global.privilegedRoles),
 router.delete('/:id', authenticateToken, authorizeRoles(...global.privilegedRoles), async (req, res) => {
     try {
         const id = parseInt(req.params.id);
-        await prisma.mushroom.delete({
-            where: { id }
+        const deleted = await prisma.mushroom.delete({
+            where: { id }, include: { images: true }
         });
+        await removeStoredMedia(prisma, deleted.images || []);
         res.json({ message: 'Xóa giống nấm thành công' });
     } catch (error) {
         console.error(error);
@@ -94,4 +109,3 @@ router.delete('/:id', authenticateToken, authorizeRoles(...global.privilegedRole
 });
 
 module.exports = router;
-

@@ -13,6 +13,7 @@ const users = [
 const tasks = [];
 const withRelations = (task) => ({ ...task, batch: task.batchId ? { batchCode: 'DEMO-001' } : null, assignee: users.find((user) => user.id === task.assigneeUserId) || null });
 global.prisma = {
+    $transaction: async (callback) => callback(global.prisma),
     user: {
         findUnique: async ({ where }) => users.find((user) => user.id === where.id || user.username === where.username) || null,
         count: async () => users.length,
@@ -23,8 +24,8 @@ global.prisma = {
         count: async ({ where }) => tasks.filter((task) => !where.status || !where.status.in || where.status.in.includes(task.status)).length,
         findMany: async ({ where }) => tasks.filter((task) => !where.status || !where.status.in || where.status.in.includes(task.status)).map(withRelations),
         findUnique: async ({ where }) => { const task = tasks.find((item) => item.id === where.id); return task ? withRelations(task) : null; },
-        create: async ({ data }) => { const task = { id: `00000000-0000-4000-8000-${String(tasks.length + 1).padStart(12, '0')}`, status: 'TODO', createdAt: new Date(), updatedAt: new Date(), ...data }; tasks.push(task); return withRelations(task); },
-        update: async ({ where, data }) => { const task = tasks.find((item) => item.id === where.id); Object.assign(task, data, { updatedAt: new Date() }); return withRelations(task); },
+        create: async ({ data }) => { const task = { id: `00000000-0000-4000-8000-${String(tasks.length + 1).padStart(12, '0')}`, status: 'TODO', version: 0, createdAt: new Date(), updatedAt: new Date(), ...data }; tasks.push(task); return withRelations(task); },
+        update: async ({ where, data }) => { const task = tasks.find((item) => item.id === where.id); Object.assign(task, data, { version: task.version + (data.version?.increment || 0), updatedAt: new Date() }); return withRelations(task); },
         delete: async ({ where }) => { const index = tasks.findIndex((item) => item.id === where.id); if (index < 0) throw new Error('missing'); return tasks.splice(index, 1)[0]; }
     }
 };

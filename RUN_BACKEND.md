@@ -187,6 +187,33 @@ npm run prisma:generate
 
 Các script bổ sung yêu cầu bảng lõi như `users` và `cultivation_batches` đã tồn tại. Chúng không thay thế toàn bộ schema. Nếu database cũ thiếu cột khác, đối chiếu với `prisma/schema.prisma` trước khi cập nhật; phần tạo database mới ở trên không phải quy trình nâng cấp database đang dùng.
 
+### Nâng cấp minh chứng, tài chính và gallery
+
+Database đã có schema trước tính năng này (gồm `tasks`, nhật ký chăm sóc, sinh trưởng và thu hoạch) chạy **một lần**:
+
+```powershell
+npx prisma db execute --file sql/workflow_finance_gallery.sql --config prisma.config.ts
+npm run prisma:generate
+```
+
+Dừng API trong lúc nâng cấp và sao lưu database/`uploads` trước khi chạy. Script thêm trạng thái chờ duyệt, version công việc, cột người thực hiện và các bảng mới; không gán tác giả cho nhật ký cũ và không thay đổi task đã hoàn thành. Không chạy script này sau khi database đã được tạo/cập nhật bằng schema mới qua `db push`; khi đó các cột/bảng đã tồn tại. MySQL DDL không rollback toàn bộ script: nếu nâng cấp dừng giữa chừng, đối chiếu schema và phục hồi bản sao lưu trước khi chạy lại.
+
+Đối chiếu schema sau nâng cấp, rồi khởi động lại API:
+
+```powershell
+npx prisma migrate diff --from-config-datasource --to-schema prisma/schema.prisma --exit-code
+```
+
+Các Flutter client cũ dùng PATCH `COMPLETED` phải chuyển sang gửi minh chứng/duyệt theo tài liệu tích hợp mới.
+
+Kiểm thử tính năng trên database tạm độc lập:
+
+```powershell
+npm run test:db
+```
+
+Lệnh dùng cấu hình host/user/password/port trong môi trường; tài khoản cần quyền tạo/xóa database. Nó tạo database tên `dacs_feature_test_<random>`, áp dụng schema cũ và script nâng cấp, chạy API test, rồi dọn database và ảnh test. Không nâng cấp hoặc seed database ứng dụng. `npm test` không tự chạy kiểm thử database này.
+
 ### Seed dữ liệu demo, khi cần
 
 Chỉ chạy nếu muốn tạo hoặc làm mới dữ liệu demo:

@@ -155,7 +155,7 @@ test('PATCH updates only the specified progress record in its batch', async () =
     assert.deepEqual(calls.findFirst[0].where, { id: 2, batchId: 1 });
     assert.deepEqual(calls.update[0], {
         where: { id: 2 },
-        data: { notes: 'Đã hình thành quả thể' },
+        data: { notes: 'Đã hình thành quả thể', updatedByUserId: 1 },
         include: { images: true }
     });
 });
