@@ -5,17 +5,24 @@ const router = express.Router();
 
 const prisma = global.prisma;
 
-const { authenticateToken, authorizeRoles } = require('../middlewares/auth');
+const { authenticateToken, optionalAuthenticateToken, authorizeRoles } = require('../middlewares/auth');
 const { createGalleryRouter } = require('./gallery');
-const { galleryInclude, withGallery, removeStoredMedia } = require('../services/gallery');
+const { galleryInclude, publicGalleryInclude, withGallery, removeStoredMedia } = require('../services/gallery');
 const { handle, id, fields } = require('../services/apiHelpers');
 router.use(createGalleryRouter('mushroom', 'mushroomImage', 'mushroomId'));
+router.use((req, res, next) => {
+    if (['GET', 'HEAD'].includes(req.method)) {
+        res.set('Cache-Control', 'private, no-store');
+        res.vary('Authorization');
+    }
+    next();
+});
 const allowedFields = ['scientificName', 'commonName', 'otherNames', 'family', 'genus', 'capDescription', 'gillsDescription', 'stemDescription', 'sporePrintColor', 'bruisingBehavior', 'ecologyType', 'habitat', 'fruitingSeason', 'edibilityStatus', 'toxicitySymptoms', 'medicinalProperties', 'cultivationDifficulty', 'imageUrl'];
 
 
-// 1. API Tìm kiếm và Lấy danh sách (Cho phép admin, manager, staff)
+// 1. API tìm kiếm và lấy danh sách công khai
 // Hỗ trợ phân trang (tối đa 50 item/page) và query search
-router.get('/', authenticateToken, authorizeRoles(...global.allRoles), async (req, res) => {
+router.get('/', optionalAuthenticateToken, async (req, res) => {
     try {
         const page = parseInt(req.query.page) || 1;
         const limit = Math.min(parseInt(req.query.limit) || 10, 50); // Bắt buộc tối đa 50 item
@@ -35,7 +42,7 @@ router.get('/', authenticateToken, authorizeRoles(...global.allRoles), async (re
 
         const totalItems = await prisma.mushroom.count({ where: whereClause });
         const mushrooms = await prisma.mushroom.findMany({
-            include: galleryInclude,
+            include: req.user ? galleryInclude : publicGalleryInclude,
             where: whereClause,
             skip,
             take: limit,
@@ -57,8 +64,8 @@ router.get('/', authenticateToken, authorizeRoles(...global.allRoles), async (re
     }
 });
 
-router.get('/:id', authenticateToken, authorizeRoles(...global.allRoles), handle(async (req, res) => {
-    const mushroom = await prisma.mushroom.findUnique({ where: { id: id(req.params.id) }, include: galleryInclude });
+router.get('/:id', optionalAuthenticateToken, handle(async (req, res) => {
+    const mushroom = await prisma.mushroom.findUnique({ where: { id: id(req.params.id) }, include: req.user ? galleryInclude : publicGalleryInclude });
     if (!mushroom) return res.status(404).json({ message: 'Không tìm thấy giống nấm' });
     res.json({ data: withGallery(mushroom) });
 }));

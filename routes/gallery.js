@@ -1,15 +1,14 @@
 const express = require('express');
 const multer = require('multer');
-const { authenticateToken, authorizeRoles } = require('../middlewares/auth');
+const { authenticateToken, optionalAuthenticateToken, authorizeRoles } = require('../middlewares/auth');
 const { auditAction } = require('../middlewares/audit');
 const { fail, id, pagination, pageResponse, fields, textField, handle } = require('../services/apiHelpers');
-const { createGalleryUpload, removeUploads, removeStoredMedia, orderBy } = require('../services/gallery');
+const { createGalleryUpload, removeUploads, removeStoredMedia, orderBy, publicImageSelect } = require('../services/gallery');
 
 const createGalleryRouter = (parentModel, imageModel, parentField) => {
     const router = express.Router();
     const prisma = global.prisma;
     const upload = createGalleryUpload();
-    const all = [authenticateToken, authorizeRoles(...global.allRoles)];
     const managers = [authenticateToken, authorizeRoles(...global.privilegedRoles)];
     const audit = (action) => auditAction(`GALLERY_${action}`, { entityType: parentModel, entityId: (req) => req.params.id });
     const lockParent = async (tx, parentId) => {
@@ -17,12 +16,18 @@ const createGalleryRouter = (parentModel, imageModel, parentField) => {
         if (!changed.count) fail(404, 'Không tìm thấy đối tượng');
     };
 
-    router.get('/:id/images', ...all, handle(async (req, res) => {
+    router.get('/:id/images', (req, res, next) => {
+        res.set('Cache-Control', 'private, no-store');
+        res.vary('Authorization');
+        next();
+    }, 
+    optionalAuthenticateToken, 
+    handle(async (req, res) => {
         const parentId = id(req.params.id);
         const paging = pagination(req.query);
         if (!await prisma[parentModel].findUnique({ where: { id: parentId }, select: { id: true } })) fail(404, 'Không tìm thấy đối tượng');
-        const where = { [parentField]: parentId };
-        const [total, rows] = await Promise.all([prisma[imageModel].count({ where }), prisma[imageModel].findMany({ where, skip: paging.skip, take: paging.limit, orderBy })]);
+        const where = { [parentField]: parentId, ...(!req.user ? { isPublic: true } : {}) };
+        const [total, rows] = await Promise.all([prisma[imageModel].count({ where }), prisma[imageModel].findMany({ where, skip: paging.skip, take: paging.limit, orderBy, ...(!req.user ? { select: publicImageSelect } : {}) })]);
         res.json(pageResponse(rows, total, paging));
     }));
 
@@ -33,15 +38,17 @@ const createGalleryRouter = (parentModel, imageModel, parentField) => {
         try {
             await new Promise((resolve, reject) => upload(req, res, (error) => error ? reject(error) : resolve()));
             if (!req.files?.length) fail(400, 'Cần tải lên ít nhất một ảnh');
-            if (Object.keys(req.body || {}).some((key) => key !== 'caption')) fail(400, 'Chỉ hỗ trợ trường caption và images');
+            if (Object.keys(req.body || {}).some((key) => !['caption', 'isPublic'].includes(key))) fail(400, 'Chỉ hỗ trợ trường caption, isPublic và images');
             const caption = req.body.caption === undefined ? null : textField(req.body.caption, 'caption', 500, true);
+            if (req.body.isPublic !== undefined && !['true', 'false'].includes(req.body.isPublic)) fail(400, 'isPublic phải là true hoặc false');
+            const isPublic = req.body.isPublic === 'true';
             const rows = await prisma.$transaction(async (tx) => {
                 await lockParent(tx, parentId);
                 const hasImages = await tx[imageModel].count({ where: { [parentField]: parentId } });
                 const created = [];
                 for (const [index, file] of req.files.entries()) {
                     if (file.originalname.length > 255) fail(400, 'Tên tệp quá dài');
-                    created.push(await tx[imageModel].create({ data: { [parentField]: parentId, imageUrl: `/uploads/gallery/${file.filename}`, originalName: file.originalname, mimeType: file.mimetype, fileSize: file.size, caption, isCover: !hasImages && index === 0, uploadedByUserId: req.user.id } }));
+                    created.push(await tx[imageModel].create({ data: { [parentField]: parentId, imageUrl: `/uploads/gallery/${file.filename}`, originalName: file.originalname, mimeType: file.mimetype, fileSize: file.size, caption, isPublic, isCover: !hasImages && index === 0, uploadedByUserId: req.user.id } }));
                 }
                 return created;
             });
@@ -49,7 +56,7 @@ const createGalleryRouter = (parentModel, imageModel, parentField) => {
             res.status(201).json({ message: 'Thêm ảnh thành công', data: rows });
         } catch (error) {
             if (!committed) await removeUploads(req.files);
-            if (error instanceof multer.MulterError) fail(400, error.code === 'LIMIT_FILE_SIZE' ? 'Mỗi ảnh tối đa 5 MB' : 'Tối đa 5 ảnh và một caption mỗi lần tải');
+            if (error instanceof multer.MulterError) fail(400, error.code === 'LIMIT_FILE_SIZE' ? 'Mỗi ảnh tối đa 5 MB' : 'Tối đa 5 ảnh, một caption và một isPublic mỗi lần tải');
             if (error.message === 'Chỉ hỗ trợ ảnh JPEG, PNG hoặc WebP') fail(400, error.message);
             throw error;
         }
@@ -58,9 +65,10 @@ const createGalleryRouter = (parentModel, imageModel, parentField) => {
     router.patch('/:id/images/:imageId', audit('UPDATE'), ...managers, handle(async (req, res) => {
         const parentId = id(req.params.id);
         const imageId = id(req.params.imageId);
-        fields(req.body, ['caption', 'isCover']);
+        fields(req.body, ['caption', 'isCover', 'isPublic']);
         if ('isCover' in req.body && req.body.isCover !== true) fail(400, 'Dùng isCover: true để chọn ảnh bìa');
-        const data = { ...('caption' in req.body ? { caption: textField(req.body.caption, 'caption', 500, true) } : {}), ...(req.body.isCover ? { isCover: true } : {}) };
+        if ('isPublic' in req.body && typeof req.body.isPublic !== 'boolean') fail(400, 'isPublic phải là boolean');
+        const data = { ...('caption' in req.body ? { caption: textField(req.body.caption, 'caption', 500, true) } : {}), ...(req.body.isCover ? { isCover: true } : {}), ...('isPublic' in req.body ? { isPublic: req.body.isPublic } : {}) };
         const row = await prisma.$transaction(async (tx) => {
             await lockParent(tx, parentId);
             if (!await tx[imageModel].findFirst({ where: { id: imageId, [parentField]: parentId } })) fail(404, 'Không tìm thấy ảnh trong gallery');

@@ -9,6 +9,7 @@ const swaggerUi = require('swagger-ui-express');
 const YAML = require('yamljs');
 const path = require('path');
 const { auditMiddleware } = require('./middlewares/audit');
+const { galleryMediaAccess } = require('./middlewares/galleryMedia');
 
 loadEnvironment();
 
@@ -44,7 +45,7 @@ global.privilegedRoles = privilegedRoles;
 app.use(cors(corsOptions));
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
-app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
+app.use('/uploads', galleryMediaAccess, express.static(path.join(__dirname, 'uploads')));
 app.use('/api', auditMiddleware);
 
 // api

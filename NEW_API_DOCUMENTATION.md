@@ -346,21 +346,27 @@ PATCH  /:resource/:id/images/:imageId
 DELETE /:resource/:id/images/:imageId
 ```
 
-GET dành cho mọi role; thêm/sửa/xóa chỉ dành cho manager/admin. POST nhận multipart: field `images` lặp lại, 1–5 ảnh JPEG/PNG/WebP, mỗi ảnh tối đa 5 MB; `caption` tùy chọn, tối đa 500 ký tự, áp dụng cho các ảnh trong lần tải.
+GET xác thực tùy chọn: không gửi token chỉ xem ảnh `isPublic=true` với đúng bốn trường `id`, `imageUrl`, `caption`, `isCover`. Bearer token hợp lệ của admin/manager/staff cho phép xem tất cả ảnh và đầy đủ thông tin. Token sai, hết hạn hoặc phiên bị thu hồi trả `401`. Phân trang chỉ tính các ảnh người gọi được xem. Thêm/sửa/xóa chỉ dành cho manager/admin.
 
-POST trả `201`, `{ message, data: [GalleryImage] }`; GET trả danh sách phân trang, ảnh bìa trước rồi `createdAt/id` tăng dần. GalleryImage có `id`, khóa liên kết tương ứng (`facilityId`/`mushroomId`/`batchId`), `imageUrl`, `originalName`, `mimeType`, `fileSize`, `caption`, `isCover`, `uploadedByUserId`, `createdAt`.
+POST nhận multipart: field `images` lặp lại, 1–5 ảnh JPEG/PNG/WebP, mỗi ảnh tối đa 5 MB; `caption` tùy chọn, tối đa 500 ký tự; `isPublic` tùy chọn, chuỗi `true` hoặc `false`, mặc định `false`. Chú thích và trạng thái công khai áp dụng cho mọi ảnh trong lần tải.
 
-PATCH chú thích hoặc chọn ảnh bìa:
+POST trả `201`, `{ message, data: [GalleryImage] }`; GET trả danh sách phân trang, ảnh bìa trước rồi `createdAt/id` tăng dần. GalleryImage đầy đủ có `id`, khóa liên kết tương ứng (`facilityId`/`mushroomId`/`batchId`), `imageUrl`, `originalName`, `mimeType`, `fileSize`, `caption`, `isCover`, `isPublic`, `uploadedByUserId`, `createdAt`.
+
+PATCH chú thích, chọn ảnh bìa hoặc đổi trạng thái công khai:
 
 ```json
-{ "caption": "Khu chăm sóc", "isCover": true }
+{ "caption": "Khu chăm sóc", "isCover": true, "isPublic": true }
 ```
 
 Không gửi `isCover: false`; chọn ảnh khác để đổi bìa. PATCH trả `{ message, data: GalleryImage }`. Ảnh đầu tiên làm bìa; xóa bìa tự chọn ảnh còn lại cũ nhất. Không có ảnh thì `coverImageUrl=null`; giống nấm dùng `imageUrl` cũ làm dự phòng.
 
+Gửi `{ "isPublic": false }` để ẩn ảnh với khách. PATCH yêu cầu JSON boolean, không nhận chuỗi `"true"`/`"false"`. API danh sách/chi tiết giống nấm xác thực tùy chọn; ảnh bìa và `imageCount` của khách chỉ tính ảnh gallery public.
+
 GET danh sách/chi tiết ba resource trả thêm `coverImageUrl`, `imageCount`. Có thêm `GET /mushroom-species/:id` để xem chi tiết giống nấm. Gallery lô độc lập với ảnh trong nhật ký sinh trưởng. API gallery không yêu cầu ảnh trong nhật ký sinh trưởng phải được duyệt.
 
 URL ảnh `/uploads/...` ghép với server origin, không ghép thêm `/api`. Upload lỗi được dọn tệp; xóa ảnh/đối tượng dọn các tệp không được hồ sơ minh chứng tham chiếu. Sai định dạng/quá giới hạn trả `400`; không đủ quyền trả `403`; ảnh không thuộc đối tượng trả `404`.
+
+URL `/uploads/gallery/...` kiểm tra `isPublic`: ảnh riêng tư chỉ tải được với Bearer token hợp lệ, khách nhận `404`; ảnh public tải được không cần token. Flutter cần gửi header Authorization khi tải ảnh riêng tư; Flutter Web có thể fetch ảnh bằng token rồi tạo blob URL. Phản hồi gallery và tệp gallery dùng `Cache-Control: private, no-store` và `Vary: Authorization`. Ảnh nhật ký sinh trưởng giữ cơ chế hiện tại.
 
 API này cho phép giao cho `admin`, `manager` hoặc `staff`; không dùng `/admin/users` cho màn giao việc.
 

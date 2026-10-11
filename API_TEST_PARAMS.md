@@ -273,4 +273,8 @@ Manager gọi `POST /api/cultivation-batches/66/sales`:
 
 Xem `GET /api/cultivation-batches/66/financial-summary`, `GET /api/reports/financial`, xuất `/api/reports/financial/export?format=xlsx`. Staff phải nhận `403` ở các API tài chính.
 
-Upload gallery bằng manager: POST multipart `images` (1–5 ảnh) và `caption` tùy chọn tới `/api/production-facilities/1/images`, `/api/mushroom-species/1/images`, `/api/cultivation-batches/66/images`. Chọn ảnh bìa bằng PATCH `.../images/{imageId}` với `{ "isCover": true }`. Staff được GET nhưng không upload/sửa/xóa.
+Upload gallery bằng manager: POST multipart `images` (1–5 ảnh), `caption` và `isPublic` tùy chọn tới `/api/production-facilities/1/images`, `/api/mushroom-species/1/images`, `/api/cultivation-batches/66/images`. Gửi `isPublic` dạng chuỗi `true` hoặc `false`, áp dụng cho mọi ảnh trong lần tải; mặc định `false` (riêng tư).
+
+Chọn ảnh bìa bằng PATCH `.../images/{imageId}` với `{ "isCover": true }`. Công khai ảnh bằng `{ "isPublic": true }`, chuyển riêng tư bằng `{ "isPublic": false }` (JSON boolean). Staff được GET nhưng không upload/sửa/xóa.
+
+GET không gửi Authorization chỉ thấy ảnh `isPublic=true` với `id`, `imageUrl`, `caption`, `isCover`; phân trang chỉ tính ảnh public. Gửi Bearer token hợp lệ để xem tất cả ảnh với đầy đủ metadata, gồm `originalName`, `uploadedByUserId`, `createdAt`, `isPublic`. Token sai/hết hạn trả `401`. URL `/uploads/gallery/...` của ảnh riêng tư cũng cần Bearer token hợp lệ.

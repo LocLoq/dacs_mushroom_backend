@@ -26,7 +26,7 @@ let facility;
 const uploadedUrls = new Set();
 const token = (user) => jwt.sign({ id: user.id, username: user.username, tokenver: 0 }, process.env.JWT_SECRET);
 const request = async (url, user = manager, body, method = body === undefined ? 'GET' : 'POST') => {
-    const response = await fetch(`${baseUrl}${url}`, { method, headers: { authorization: `Bearer ${token(user)}`, ...(body && !(body instanceof FormData) ? { 'content-type': 'application/json' } : {}) }, ...(body === undefined ? {} : { body: body instanceof FormData ? body : JSON.stringify(body) }) });
+    const response = await fetch(`${baseUrl}${url}`, { method, headers: { ...(user ? { authorization: `Bearer ${token(user)}` } : {}), ...(body && !(body instanceof FormData) ? { 'content-type': 'application/json' } : {}) }, ...(body === undefined ? {} : { body: body instanceof FormData ? body : JSON.stringify(body) }) });
     const data = (response.headers.get('content-type') || '').includes('application/json') ? await response.json() : Buffer.from(await response.arrayBuffer());
     return { status: response.status, body: data };
 };
@@ -50,7 +50,7 @@ before(async () => {
     assert.match(database, /^dacs_feature_test_[a-f0-9]{16}$/);
     await connection.query(`CREATE DATABASE \`${database}\` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci`);
     await connection.query(`USE \`${database}\``);
-    for (const filename of ['test/fixtures/pre_workflow_schema.sql', 'sql/workflow_finance_gallery.sql']) {
+    for (const filename of ['test/fixtures/pre_workflow_schema.sql', 'sql/workflow_finance_gallery.sql', 'sql/gallery_visibility.sql']) {
         const statements = fs.readFileSync(path.join(__dirname, '..', filename), 'utf8').split(';').map((statement) => statement.trim()).filter(Boolean);
         for (const statement of statements) await connection.query(statement);
         if (filename.includes('pre_workflow_schema')) {
@@ -61,6 +61,11 @@ before(async () => {
             await connection.query("INSERT INTO cultivation_batches (batch_code,facility_id,mushroom_id,start_date,updated_at) VALUES ('LEGACY',1,1,NOW(3),NOW(3))");
             await connection.query("INSERT INTO tasks (id,title,status,batch_id,updated_at) VALUES ('legacy-task','Already complete','COMPLETED',1,NOW(3))");
             await connection.query("INSERT INTO growth_progress_records (batch_id,stage,notes) VALUES (1,'FRUITING','Legacy note')");
+        }
+        if (filename === 'sql/workflow_finance_gallery.sql') {
+            for (const [table, parentField] of [['facility_images', 'facility_id'], ['mushroom_images', 'mushroom_id'], ['batch_images', 'batch_id']]) {
+                await connection.query(`INSERT INTO ${table} (${parentField},image_url,original_name,mime_type,file_size) VALUES (1,'/uploads/gallery/legacy.png','legacy.png','image/png',1)`);
+            }
         }
     }
     prisma = new PrismaClient({ adapter: new PrismaMariaDb({ ...config, database, connectionLimit: 8 }) });
@@ -79,6 +84,7 @@ before(async () => {
     secondBatch = await prisma.cultivationBatch.create({ data: { batchCode: 'TEST-002', facilityId: facility.id, mushroomId: species.id, startDate: new Date('2025-01-01') } });
     const app = express();
     app.use(express.json());
+    app.use('/uploads', require('../middlewares/galleryMedia').galleryMediaAccess, express.static(path.join(__dirname, '..', 'uploads')));
     app.use('/api/dashboard', require('../routes/dashboard'));
     app.use('/api/cultivation-batches', require('../routes/cultivationBatchManagement'));
     app.use('/api/mushroom-species', require('../routes/mushroomSpeciesManagement'));
@@ -109,6 +115,10 @@ test('SQL upgrade matches Prisma schema and preserves existing records', { skip:
     const legacyRecord = await prisma.growthProgressRecord.findFirst({ where: { notes: 'Legacy note' } });
     assert.equal(legacyRecord.createdByUserId, null);
     assert.equal(legacyRecord.updatedByUserId, null);
+    for (const model of ['facilityImage', 'mushroomImage', 'batchImage']) {
+        const image = await prisma[model].findFirst({ where: { originalName: 'legacy.png' } });
+        assert.equal(image.isPublic, false);
+    }
     const configUrl = `mysql://${encodeURIComponent(process.env.DATABASE_USER)}:${encodeURIComponent(process.env.DATABASE_PASSWORD || '')}@${process.env.DATABASE_HOST}:${process.env.DATABASE_PORT || 3306}/${database}`;
     const result = spawnSync(process.execPath, ['node_modules/prisma/build/index.js', 'migrate', 'diff', '--from-config-datasource', '--to-schema', 'prisma/schema.prisma', '--exit-code'], { encoding: 'utf8', env: { ...process.env, DATABASE_URL: configUrl, DATABASE_NAME: database } });
     assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
@@ -247,9 +257,26 @@ test('three galleries manage covers, permissions, files and legacy fallback', { 
         result.body.data.forEach((image) => uploadedUrls.add(image.imageUrl));
         assert.equal(first.isCover, true);
         assert.equal(second.isCover, false);
+        assert.equal(first.isPublic, false);
+        assert.equal(second.isPublic, false);
         assert.equal((await request(galleryPath, staff)).body.data.length, 2);
+        const anonymous = await request(galleryPath, null);
+        assert.deepEqual(anonymous.body.data, []);
+        assert.equal(anonymous.body.pagination.totalItems, 0);
+        const fileUrl = `${baseUrl.replace(/\/api$/, '')}${first.imageUrl}`;
+        assert.equal((await fetch(fileUrl)).status, 404);
+        assert.equal((await fetch(fileUrl, { headers: { authorization: `Bearer ${token(staff)}` } })).status, 200);
         assert.equal((await request(`${galleryPath}/${second.id}`, staff, { isCover: true }, 'PATCH')).status, 403);
-        assert.equal((await request(`${galleryPath}/${second.id}`, manager, { isCover: true, caption: 'Ảnh bìa mới' }, 'PATCH')).status, 200);
+        assert.equal((await request(`${galleryPath}/${second.id}`, manager, { isCover: true, isPublic: true, caption: 'Ảnh bìa mới' }, 'PATCH')).status, 200);
+        const published = await request(galleryPath, null);
+        assert.equal(published.body.pagination.totalItems, 1);
+        assert.deepEqual(published.body.data, [{ id: second.id, imageUrl: second.imageUrl, caption: 'Ảnh bìa mới', isCover: true }]);
+        assert.equal((await fetch(`${baseUrl.replace(/\/api$/, '')}${second.imageUrl}`)).status, 200);
+        if (resource === 'mushroom-species') {
+            const publicDetail = (await request(`/${resource}/${parentId}`, null)).body.data;
+            assert.equal(publicDetail.coverImageUrl, second.imageUrl);
+            assert.equal(publicDetail.imageCount, 1);
+        }
         const detail = await request(`/${resource}/${parentId}`, staff);
         assert.equal(detail.body.data.coverImageUrl, second.imageUrl);
         assert.equal(detail.body.data.imageCount, 2);

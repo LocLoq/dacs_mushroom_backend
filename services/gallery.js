@@ -5,6 +5,11 @@ const multer = require('multer');
 
 const orderBy = [{ isCover: 'desc' }, { createdAt: 'asc' }, { id: 'asc' }];
 const galleryInclude = { images: { take: 1, orderBy }, _count: { select: { images: true } } };
+const publicImageSelect = { id: true, imageUrl: true, caption: true, isCover: true };
+const publicGalleryInclude = {
+    images: { where: { isPublic: true }, select: publicImageSelect, take: 1, orderBy },
+    _count: { select: { images: { where: { isPublic: true } } } }
+};
 const withGallery = (row) => {
     const { images, _count, ...data } = row;
     return { ...data, coverImageUrl: images?.[0]?.imageUrl || row.imageUrl || null, imageCount: _count?.images || 0 };
@@ -32,9 +37,9 @@ const createGalleryUpload = () => {
     const extensions = { 'image/jpeg': '.jpg', 'image/png': '.png', 'image/webp': '.webp' };
     return multer({
         storage: multer.diskStorage({ destination: directory, filename: (req, file, callback) => callback(null, `${crypto.randomUUID()}${extensions[file.mimetype]}`) }),
-        limits: { fileSize: 5 * 1024 * 1024, files: 5, fields: 1 },
+        limits: { fileSize: 5 * 1024 * 1024, files: 5, fields: 2 },
         fileFilter: (req, file, callback) => callback(extensions[file.mimetype] ? null : new Error('Chỉ hỗ trợ ảnh JPEG, PNG hoặc WebP'), Boolean(extensions[file.mimetype]))
     }).array('images', 5);
 };
 
-module.exports = { galleryInclude, withGallery, removeStoredMedia, createGalleryUpload, removeUploads, orderBy };
+module.exports = { galleryInclude, publicGalleryInclude, publicImageSelect, withGallery, removeStoredMedia, createGalleryUpload, removeUploads, orderBy };

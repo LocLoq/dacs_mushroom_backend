@@ -193,6 +193,7 @@ Database đã có schema trước tính năng này (gồm `tasks`, nhật ký ch
 
 ```powershell
 npx prisma db execute --file sql/workflow_finance_gallery.sql --config prisma.config.ts
+npx prisma db execute --file sql/gallery_visibility.sql --config prisma.config.ts
 npm run prisma:generate
 ```
 
@@ -205,6 +206,17 @@ npx prisma migrate diff --from-config-datasource --to-schema prisma/schema.prism
 ```
 
 Các Flutter client cũ dùng PATCH `COMPLETED` phải chuyển sang gửi minh chứng/duyệt theo tài liệu tích hợp mới.
+
+### Nâng cấp quyền xem gallery
+
+Database đã có ba bảng `facility_images`, `mushroom_images`, `batch_images` nhưng chưa có cột `is_public` chạy **một lần**:
+
+```powershell
+npx prisma db execute --file sql/gallery_visibility.sql --config prisma.config.ts
+npm run prisma:generate
+```
+
+Script chỉ thêm cột `is_public` (Prisma: `isPublic`) với mặc định `false`; các ảnh cũ trở thành riêng tư. Manager/admin có thể công khai từng ảnh bằng PATCH `{ "isPublic": true }`. Không chạy lại khi các cột đã tồn tại hoặc database đã được cập nhật bằng `db push`. Khởi động lại API sau khi nâng cấp.
 
 Kiểm thử tính năng trên database tạm độc lập:
 

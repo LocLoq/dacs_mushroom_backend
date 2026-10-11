@@ -548,8 +548,18 @@ components:
           type: "array"
           items:
             $ref: "#/components/schemas/FinancialSeriesPoint"
+    PublicGalleryImage:
+      type: object
+      additionalProperties: false
+      required: [id, imageUrl, caption, isCover]
+      properties:
+        id: { type: integer, minimum: 1 }
+        imageUrl: { type: string }
+        caption: { type: string, nullable: true, maxLength: 500 }
+        isCover: { type: boolean }
     GalleryImage:
       type: "object"
+      required: [id, imageUrl, originalName, mimeType, fileSize, caption, isCover, isPublic, uploadedByUserId, createdAt]
       properties:
         id:
           type: "integer"
@@ -577,6 +587,9 @@ components:
           maxLength: 500
         isCover:
           type: "boolean"
+        isPublic:
+          type: "boolean"
+          default: false
         uploadedByUserId:
           type: "integer"
           nullable: true
@@ -595,6 +608,9 @@ components:
         isCover:
           type: "boolean"
           enum: [true]
+        isPublic:
+          type: "boolean"
+          description: Bật hoặc tắt công khai ảnh.
     TaskCreateInput:
       type: object
       properties:
@@ -1282,7 +1298,11 @@ paths:
   /api/mushroom-species:
     get:
       summary: Lấy danh sách giống nấm
+      description: API công khai. Khách chỉ nhận ảnh bìa và imageCount từ ảnh gallery isPublic=true; người đăng nhập xem toàn bộ gallery. Token sai hoặc hết hạn trả 401.
       tags: [Quản lý Giống Nấm]
+      security:
+        - {}
+        - bearerAuth: []
       parameters:
         - name: page
           in: query
@@ -1298,6 +1318,7 @@ paths:
             type: string
           description: Tìm kiếm theo tên khoa học, tên thường gọi, họ, chi
       responses:
+        '401': { description: Token không hợp lệ hoặc hết hạn }
         '200':
           description: Danh sách các giống nấm (kèm phân trang)
     post:
@@ -1316,10 +1337,15 @@ paths:
   /api/mushroom-species/{id}:
     get:
       summary: Chi tiết giống nấm và thông tin gallery
+      description: API công khai. Khách chỉ nhận ảnh bìa và imageCount từ ảnh gallery isPublic=true; người đăng nhập xem toàn bộ gallery. Token sai hoặc hết hạn trả 401.
       tags: [Quản lý giống nấm]
+      security:
+        - {}
+        - bearerAuth: []
       parameters:
         - { name: id, in: path, required: true, schema: { type: integer, minimum: 1 } }
       responses:
+        '401': { description: Token không hợp lệ hoặc hết hạn }
         '200':
           description: Chi tiết giống nấm
           content:
@@ -1329,8 +1355,6 @@ paths:
                 properties:
                   data:
                     $ref: '#/components/schemas/Mushroom'
-        '401': { description: Token không hợp lệ }
-        '403': { description: Không đủ quyền }
         '404': { description: Không tìm thấy giống nấm }
     put:
       summary: Cập nhật thông tin giống nấm
@@ -2510,7 +2534,11 @@ paths:
           description: "Lỗi máy chủ"
   /api/production-facilities/{id}/images:
     get:
-      summary: "Xem gallery (admin/manager/staff)"
+      summary: "Xem gallery (xác thực tùy chọn)"
+      description: Không có token chỉ xem ảnh isPublic=true với id, imageUrl, caption, isCover. Bearer token hợp lệ xem tất cả ảnh và đầy đủ thông tin. Token sai hoặc hết hạn trả 401. Phân trang chỉ tính ảnh người gọi được xem.
+      security:
+        - {}
+        - bearerAuth: []
       tags: ["Gallery"]
       parameters: [{"name":"id","in":"path","required":true,"schema":{"type":"integer","minimum":1}},{"name":"page","in":"query","schema":{"type":"integer","minimum":1,"default":1}},{"name":"limit","in":"query","schema":{"type":"integer","minimum":1,"default":10,"maximum":50}}]
       responses:
@@ -2524,15 +2552,15 @@ paths:
                   data:
                     type: "array"
                     items:
-                      $ref: "#/components/schemas/GalleryImage"
+                      anyOf:
+                        - $ref: "#/components/schemas/PublicGalleryImage"
+                        - $ref: "#/components/schemas/GalleryImage"
                   pagination:
                     $ref: "#/components/schemas/Pagination"
         "400":
           description: "Dữ liệu không hợp lệ"
         "401":
-          description: "Token thiếu hoặc không hợp lệ"
-        "403":
-          description: "Không đủ quyền"
+          description: "Token không hợp lệ hoặc hết hạn"
         "404":
           description: "Không tìm thấy dữ liệu"
         "409":
@@ -2562,6 +2590,10 @@ paths:
                 caption:
                   type: "string"
                   maxLength: 500
+                isPublic:
+                  type: boolean
+                  default: false
+                  description: Áp dụng cho tất cả ảnh trong lần tải. Gửi multipart true hoặc false; mặc định riêng tư.
       responses:
         "201":
           description: "Thành công"
@@ -2590,7 +2622,7 @@ paths:
           description: "Lỗi máy chủ"
   /api/production-facilities/{id}/images/{imageId}:
     patch:
-      summary: "Đổi chú thích/chọn ảnh bìa (manager/admin)"
+      summary: "Đổi chú thích/ảnh bìa/trạng thái công khai (manager/admin)"
       tags: ["Gallery"]
       parameters: [{"name":"id","in":"path","required":true,"schema":{"type":"integer","minimum":1}},{"name":"imageId","in":"path","required":true,"schema":{"type":"integer","minimum":1}}]
       requestBody:
@@ -2644,7 +2676,11 @@ paths:
           description: "Lỗi máy chủ"
   /api/mushroom-species/{id}/images:
     get:
-      summary: "Xem gallery (admin/manager/staff)"
+      summary: "Xem gallery (xác thực tùy chọn)"
+      description: Không có token chỉ xem ảnh isPublic=true với id, imageUrl, caption, isCover. Bearer token hợp lệ xem tất cả ảnh và đầy đủ thông tin. Token sai hoặc hết hạn trả 401. Phân trang chỉ tính ảnh người gọi được xem.
+      security:
+        - {}
+        - bearerAuth: []
       tags: ["Gallery"]
       parameters: [{"name":"id","in":"path","required":true,"schema":{"type":"integer","minimum":1}},{"name":"page","in":"query","schema":{"type":"integer","minimum":1,"default":1}},{"name":"limit","in":"query","schema":{"type":"integer","minimum":1,"default":10,"maximum":50}}]
       responses:
@@ -2658,15 +2694,15 @@ paths:
                   data:
                     type: "array"
                     items:
-                      $ref: "#/components/schemas/GalleryImage"
+                      anyOf:
+                        - $ref: "#/components/schemas/PublicGalleryImage"
+                        - $ref: "#/components/schemas/GalleryImage"
                   pagination:
                     $ref: "#/components/schemas/Pagination"
         "400":
           description: "Dữ liệu không hợp lệ"
         "401":
-          description: "Token thiếu hoặc không hợp lệ"
-        "403":
-          description: "Không đủ quyền"
+          description: "Token không hợp lệ hoặc hết hạn"
         "404":
           description: "Không tìm thấy dữ liệu"
         "409":
@@ -2696,6 +2732,10 @@ paths:
                 caption:
                   type: "string"
                   maxLength: 500
+                isPublic:
+                  type: boolean
+                  default: false
+                  description: Áp dụng cho tất cả ảnh trong lần tải. Gửi multipart true hoặc false; mặc định riêng tư.
       responses:
         "201":
           description: "Thành công"
@@ -2724,7 +2764,7 @@ paths:
           description: "Lỗi máy chủ"
   /api/mushroom-species/{id}/images/{imageId}:
     patch:
-      summary: "Đổi chú thích/chọn ảnh bìa (manager/admin)"
+      summary: "Đổi chú thích/ảnh bìa/trạng thái công khai (manager/admin)"
       tags: ["Gallery"]
       parameters: [{"name":"id","in":"path","required":true,"schema":{"type":"integer","minimum":1}},{"name":"imageId","in":"path","required":true,"schema":{"type":"integer","minimum":1}}]
       requestBody:
@@ -2778,7 +2818,11 @@ paths:
           description: "Lỗi máy chủ"
   /api/cultivation-batches/{id}/images:
     get:
-      summary: "Xem gallery (admin/manager/staff)"
+      summary: "Xem gallery (xác thực tùy chọn)"
+      description: Không có token chỉ xem ảnh isPublic=true với id, imageUrl, caption, isCover. Bearer token hợp lệ xem tất cả ảnh và đầy đủ thông tin. Token sai hoặc hết hạn trả 401. Phân trang chỉ tính ảnh người gọi được xem.
+      security:
+        - {}
+        - bearerAuth: []
       tags: ["Gallery"]
       parameters: [{"name":"id","in":"path","required":true,"schema":{"type":"integer","minimum":1}},{"name":"page","in":"query","schema":{"type":"integer","minimum":1,"default":1}},{"name":"limit","in":"query","schema":{"type":"integer","minimum":1,"default":10,"maximum":50}}]
       responses:
@@ -2792,15 +2836,15 @@ paths:
                   data:
                     type: "array"
                     items:
-                      $ref: "#/components/schemas/GalleryImage"
+                      anyOf:
+                        - $ref: "#/components/schemas/PublicGalleryImage"
+                        - $ref: "#/components/schemas/GalleryImage"
                   pagination:
                     $ref: "#/components/schemas/Pagination"
         "400":
           description: "Dữ liệu không hợp lệ"
         "401":
-          description: "Token thiếu hoặc không hợp lệ"
-        "403":
-          description: "Không đủ quyền"
+          description: "Token không hợp lệ hoặc hết hạn"
         "404":
           description: "Không tìm thấy dữ liệu"
         "409":
@@ -2830,6 +2874,10 @@ paths:
                 caption:
                   type: "string"
                   maxLength: 500
+                isPublic:
+                  type: boolean
+                  default: false
+                  description: Áp dụng cho tất cả ảnh trong lần tải. Gửi multipart true hoặc false; mặc định riêng tư.
       responses:
         "201":
           description: "Thành công"
@@ -2858,7 +2906,7 @@ paths:
           description: "Lỗi máy chủ"
   /api/cultivation-batches/{id}/images/{imageId}:
     patch:
-      summary: "Đổi chú thích/chọn ảnh bìa (manager/admin)"
+      summary: "Đổi chú thích/ảnh bìa/trạng thái công khai (manager/admin)"
       tags: ["Gallery"]
       parameters: [{"name":"id","in":"path","required":true,"schema":{"type":"integer","minimum":1}},{"name":"imageId","in":"path","required":true,"schema":{"type":"integer","minimum":1}}]
       requestBody:
