@@ -6,6 +6,7 @@ const pdfMake = require('pdfmake');
 const { auditAction } = require('../middlewares/audit');
 const { authenticateToken, authorizeRoles } = require('../middlewares/auth');
 const { financialSummary, financialSeries } = require('../services/financials');
+const { fail, id, pagination, pageResponse, textField, dateField, handle } = require('../services/apiHelpers');
 
 const router = express.Router();
 const prisma = global.prisma;
@@ -24,18 +25,12 @@ pdfMake.addFonts({
 pdfMake.setUrlAccessPolicy(() => false);
 pdfMake.setLocalAccessPolicy((filePath) => path.resolve(filePath).startsWith(path.resolve(pdfFontDirectory)));
 
-const parsePositiveInteger = (value) => {
-    const parsed = Number(value);
-    return Number.isInteger(parsed) && parsed > 0 ? parsed : null;
-};
-
 const toDate = (value, endOfDay = false) => {
-    if (!value) return undefined;
-    const text = String(value);
-    const date = /^\d{4}-\d{2}-\d{2}$/.test(text)
-        ? new Date(`${text}T${endOfDay ? '23:59:59.999' : '00:00:00.000'}+07:00`)
-        : new Date(text);
-    return Number.isNaN(date.getTime()) ? null : date;
+    if (value === undefined) return undefined;
+    const validated = dateField(value, endOfDay ? 'to' : 'from');
+    return /^\d{4}-\d{2}-\d{2}$/.test(value)
+        ? new Date(`${value}T${endOfDay ? '23:59:59.999' : '00:00:00.000'}+07:00`)
+        : validated;
 };
 
 const getFilters = (query) => {
@@ -46,18 +41,17 @@ const getFilters = (query) => {
     const parsedTo = toDate(query.to, true);
     const from = parsedFrom === undefined ? defaultFrom : parsedFrom;
     const to = parsedTo === undefined ? now : parsedTo;
-    const facilityId = query.facilityId ? parsePositiveInteger(query.facilityId) : undefined;
-    const mushroomId = query.mushroomId ? parsePositiveInteger(query.mushroomId) : undefined;
-    const status = query.status || undefined;
-    const groupBy = query.groupBy || 'month';
-    const page = parsePositiveInteger(query.page) || 1;
-    const limit = Math.min(parsePositiveInteger(query.limit) || 20, 100);
+    const facilityId = query.facilityId === undefined ? undefined : id(query.facilityId);
+    const mushroomId = query.mushroomId === undefined ? undefined : id(query.mushroomId);
+    const status = query.status;
+    const groupBy = query.groupBy === undefined ? 'month' : query.groupBy;
+    const paging = pagination(query, 100, 20);
     const maxRange = 5 * 366 * 24 * 60 * 60 * 1000;
 
-    if (!from || !to || from > to || to - from > maxRange || (query.facilityId && !facilityId) || (query.mushroomId && !mushroomId) || (status && !allowedStatuses.has(status)) || !['day', 'month'].includes(groupBy)) {
-        return { error: 'Bộ lọc báo cáo không hợp lệ hoặc vượt quá 5 năm' };
+    if (from > to || to - from > maxRange || (status !== undefined && !allowedStatuses.has(status)) || !['day', 'month'].includes(groupBy)) {
+        fail(400, 'Bộ lọc báo cáo không hợp lệ hoặc vượt quá 5 năm');
     }
-    return { from, to, facilityId, mushroomId, status, groupBy, page, limit };
+    return { from, to, facilityId, mushroomId, status, groupBy, ...paging };
 };
 
 const batchWhere = (filters) => ({
@@ -181,54 +175,41 @@ const getOverview = async (filters) => {
     };
 };
 
-const reportHandler = (action, handler) => [auditAction(action, { entityType: 'Report' }), authenticateToken, authorizeRoles(...global.privilegedRoles), handler];
+const reportHandler = (action, handler) => [auditAction(action, { entityType: 'Report' }), authenticateToken, authorizeRoles(...global.privilegedRoles), handle(handler)];
 
 router.get('/financial', ...reportHandler('REPORT_FINANCIAL_VIEW', async (req, res) => {
     const filters = getFilters(req.query);
-    if (filters.error) return res.status(400).json({ message: filters.error });
-    try {
-        const [totalItems, data, overview] = await Promise.all([
-            prisma.cultivationBatch.count({ where: financialBatchWhere(filters) }),
-            getFinancialRows(filters, (filters.page - 1) * filters.limit, filters.limit),
-            getFinancialOverview(filters)
-        ]);
-        res.json({ data, ...overview, period: { from: filters.from, to: filters.to, groupBy: filters.groupBy }, pagination: { totalItems, currentPage: filters.page, totalPages: Math.ceil(totalItems / filters.limit), pageSize: filters.limit } });
-    } catch (error) { console.error(error); res.status(500).json({ message: 'Lỗi máy chủ' }); }
+    const [totalItems, data, overview] = await Promise.all([
+        prisma.cultivationBatch.count({ where: financialBatchWhere(filters) }),
+        getFinancialRows(filters, filters.skip, filters.limit),
+        getFinancialOverview(filters)
+    ]);
+    res.json({ ...pageResponse(data, totalItems, filters), ...overview, period: { from: filters.from, to: filters.to, groupBy: filters.groupBy } });
 }));
 
 router.get('/overview', ...reportHandler('REPORT_OVERVIEW_VIEW', async (req, res) => {
     const filters = getFilters(req.query);
-    if (filters.error) return res.status(400).json({ message: filters.error });
-    try { res.json({ data: await getOverview(filters) }); } catch (error) { console.error(error); res.status(500).json({ message: 'Lỗi máy chủ' }); }
+    res.json({ data: await getOverview(filters) });
 }));
 
 router.get('/cultivation', ...reportHandler('REPORT_CULTIVATION_VIEW', async (req, res) => {
     const filters = getFilters(req.query);
-    if (filters.error) return res.status(400).json({ message: filters.error });
-    try {
-        const [totalItems, data] = await Promise.all([prisma.cultivationBatch.count({ where: batchWhere(filters) }), getCultivationRows(filters, (filters.page - 1) * filters.limit, filters.limit)]);
-        res.json({ data, pagination: { totalItems, currentPage: filters.page, totalPages: Math.ceil(totalItems / filters.limit), pageSize: filters.limit } });
-    } catch (error) { console.error(error); res.status(500).json({ message: 'Lỗi máy chủ' }); }
+    const [totalItems, data] = await Promise.all([prisma.cultivationBatch.count({ where: batchWhere(filters) }), getCultivationRows(filters, filters.skip, filters.limit)]);
+    res.json(pageResponse(data, totalItems, filters));
 }));
 
 router.get('/classifier', ...reportHandler('REPORT_CLASSIFIER_VIEW', async (req, res) => {
     const filters = getFilters(req.query);
-    if (filters.error) return res.status(400).json({ message: filters.error });
-    try {
-        const where = { createdAt: { gte: filters.from, lte: filters.to } };
-        const [totalItems, data] = await Promise.all([prisma.classifierLookup.count({ where }), getClassifierRows(filters, (filters.page - 1) * filters.limit, filters.limit)]);
-        res.json({ data, pagination: { totalItems, currentPage: filters.page, totalPages: Math.ceil(totalItems / filters.limit), pageSize: filters.limit } });
-    } catch (error) { console.error(error); res.status(500).json({ message: 'Lỗi máy chủ' }); }
+    const where = { createdAt: { gte: filters.from, lte: filters.to } };
+    const [totalItems, data] = await Promise.all([prisma.classifierLookup.count({ where }), getClassifierRows(filters, filters.skip, filters.limit)]);
+    res.json(pageResponse(data, totalItems, filters));
 }));
 
 router.get('/audit', ...reportHandler('REPORT_AUDIT_VIEW', async (req, res) => {
     const filters = getFilters(req.query);
-    if (filters.error) return res.status(400).json({ message: filters.error });
-    try {
-        const where = { createdAt: { gte: filters.from, lte: filters.to } };
-        const [totalItems, data] = await Promise.all([prisma.auditLog.count({ where }), getAuditRows(filters, (filters.page - 1) * filters.limit, filters.limit)]);
-        res.json({ data, pagination: { totalItems, currentPage: filters.page, totalPages: Math.ceil(totalItems / filters.limit), pageSize: filters.limit } });
-    } catch (error) { console.error(error); res.status(500).json({ message: 'Lỗi máy chủ' }); }
+    const where = { createdAt: { gte: filters.from, lte: filters.to } };
+    const [totalItems, data] = await Promise.all([prisma.auditLog.count({ where }), getAuditRows(filters, filters.skip, filters.limit)]);
+    res.json(pageResponse(data, totalItems, filters));
 }));
 
 const columnsFor = (type) => ({
@@ -260,54 +241,48 @@ const exportRows = async (type, filters, maxRows) => {
 
 router.get('/:type/export', ...reportHandler('REPORT_EXPORT', async (req, res) => {
     const { type } = req.params;
-    const format = String(req.query.format || '').toLowerCase();
+    const format = req.query.format === undefined ? '' : textField(req.query.format, 'format').toLowerCase();
     const filters = getFilters(req.query);
-    if (!allowedTypes.has(type) || !['csv', 'xlsx', 'pdf'].includes(format)) return res.status(400).json({ message: 'Loại báo cáo hoặc định dạng xuất không hợp lệ' });
-    if (filters.error) return res.status(400).json({ message: filters.error });
+    if (!allowedTypes.has(type) || !['csv', 'xlsx', 'pdf'].includes(format)) fail(400, 'Loại báo cáo hoặc định dạng xuất không hợp lệ');
 
-    try {
-        const maxRows = format === 'pdf' ? 2000 : 50000;
-        const rows = await exportRows(type, filters, maxRows);
-        if (!rows) return res.status(422).json({ message: `Báo cáo vượt quá giới hạn ${maxRows.toLocaleString('vi-VN')} dòng; vui lòng thu hẹp bộ lọc` });
-        const columns = columnsFor(type);
-        const filename = `${type}-report-${new Date().toISOString().slice(0, 10)}`;
+    const maxRows = format === 'pdf' ? 2000 : 50000;
+    const rows = await exportRows(type, filters, maxRows);
+    if (!rows) fail(422, `Báo cáo vượt quá giới hạn ${maxRows.toLocaleString('vi-VN')} dòng; vui lòng thu hẹp bộ lọc`);
+    const columns = columnsFor(type);
+    const filename = `${type}-report-${new Date().toISOString().slice(0, 10)}`;
 
-        if (format === 'csv') {
-            const csv = [columns.map(([label]) => csvCell(label)).join(','), ...rows.map((row) => columns.map(([, key]) => csvCell(valueAt(row, key))).join(','))].join('\r\n');
-            res.setHeader('Content-Type', 'text/csv; charset=utf-8');
-            res.setHeader('Content-Disposition', `attachment; filename="${filename}.csv"`);
-            return res.send(`\uFEFF${csv}`);
-        }
-
-        if (format === 'xlsx') {
-            const workbook = new ExcelJS.Workbook();
-            const sheet = workbook.addWorksheet('Báo cáo');
-            sheet.columns = columns.map(([header, key]) => ({ header, key, width: Math.max(14, header.length + 4) }));
-            rows.forEach((row) => sheet.addRow(Object.fromEntries(columns.map(([, key]) => [key, valueAt(row, key)]))));
-            sheet.getRow(1).font = { bold: true };
-            const buffer = await workbook.xlsx.writeBuffer();
-            res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
-            res.setHeader('Content-Disposition', `attachment; filename="${filename}.xlsx"`);
-            return res.send(Buffer.from(buffer));
-        }
-
-        const document = {
-            defaultStyle: { font: 'Roboto', fontSize: 8 }, pageOrientation: 'landscape',
-            content: [
-                { text: `Báo cáo ${type}`, style: 'header' },
-                { text: `Từ ${filters.from.toISOString()} đến ${filters.to.toISOString()}`, margin: [0, 0, 0, 12] },
-                { table: { headerRows: 1, widths: Array(columns.length).fill('*'), body: [columns.map(([label]) => ({ text: label, bold: true })), ...rows.map((row) => columns.map(([, key]) => stringify(valueAt(row, key))))] } }
-            ],
-            styles: { header: { fontSize: 16, bold: true } }
-        };
-        const buffer = await pdfMake.createPdf(document).getBuffer();
-        res.setHeader('Content-Type', 'application/pdf');
-        res.setHeader('Content-Disposition', `attachment; filename="${filename}.pdf"`);
-        return res.send(Buffer.from(buffer));
-    } catch (error) {
-        console.error(error);
-        res.status(500).json({ message: 'Không thể xuất báo cáo' });
+    if (format === 'csv') {
+        const csv = [columns.map(([label]) => csvCell(label)).join(','), ...rows.map((row) => columns.map(([, key]) => csvCell(valueAt(row, key))).join(','))].join('\r\n');
+        res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+        res.setHeader('Content-Disposition', `attachment; filename="${filename}.csv"`);
+        return res.send(`\uFEFF${csv}`);
     }
+
+    if (format === 'xlsx') {
+        const workbook = new ExcelJS.Workbook();
+        const sheet = workbook.addWorksheet('Báo cáo');
+        sheet.columns = columns.map(([header, key]) => ({ header, key, width: Math.max(14, header.length + 4) }));
+        rows.forEach((row) => sheet.addRow(Object.fromEntries(columns.map(([, key]) => [key, valueAt(row, key)]))));
+        sheet.getRow(1).font = { bold: true };
+        const buffer = await workbook.xlsx.writeBuffer();
+        res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+        res.setHeader('Content-Disposition', `attachment; filename="${filename}.xlsx"`);
+        return res.send(Buffer.from(buffer));
+    }
+
+    const document = {
+        defaultStyle: { font: 'Roboto', fontSize: 8 }, pageOrientation: 'landscape',
+        content: [
+            { text: `Báo cáo ${type}`, style: 'header' },
+            { text: `Từ ${filters.from.toISOString()} đến ${filters.to.toISOString()}`, margin: [0, 0, 0, 12] },
+            { table: { headerRows: 1, widths: Array(columns.length).fill('*'), body: [columns.map(([label]) => ({ text: label, bold: true })), ...rows.map((row) => columns.map(([, key]) => stringify(valueAt(row, key))))] } }
+        ],
+        styles: { header: { fontSize: 16, bold: true } }
+    };
+    const buffer = await pdfMake.createPdf(document).getBuffer();
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `attachment; filename="${filename}.pdf"`);
+    return res.send(Buffer.from(buffer));
 }));
 
 module.exports = router;

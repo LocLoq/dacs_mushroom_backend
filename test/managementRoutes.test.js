@@ -53,3 +53,52 @@ test('login, admin, mushroom and facility endpoints have authenticated happy pat
     response = await request('/api/production-facilities/1', { method: 'PUT', body: JSON.stringify({ name: 'Trại sửa', mushrooms: [1] }) }); assert.equal(response.status, 200);
     response = await request('/api/production-facilities/1', { method: 'DELETE' }); assert.equal(response.status, 200);
 });
+
+test('management APIs reject invalid IDs, pagination and bodies before writing', async (t) => {
+    const writes = [
+        t.mock.method(global.prisma.user, 'update'),
+        t.mock.method(global.prisma.mushroom, 'create'),
+        t.mock.method(global.prisma.productionFacility, 'create')
+    ];
+    const cases = [
+        ['/api/admin/users/1abc', 'PUT', { full_name: 'Updated' }],
+        ['/api/admin/users/1', 'PUT', { role_id: '1abc' }],
+        ['/api/admin/users/1', 'PUT', []],
+        ['/api/mushroom-species', 'POST', { scientificName: 'Demo', metadata: {} }],
+        ['/api/mushroom-species', 'POST', { scientificName: [] }],
+        ['/api/production-facilities', 'POST', { name: 'Demo', mushrooms: ['1abc'] }],
+        ['/api/production-facilities', 'POST', { name: 'Demo', mushrooms: {} }],
+        ['/api/production-facilities', 'POST', { name: 'Demo', totalAreaSqm: '12sqm' }]
+    ];
+    for (const [url, method, body] of cases) {
+        const response = await request(url, { method, body: JSON.stringify(body) });
+        assert.equal(response.status, 400, url);
+        assert.equal((await response.json()).code, 'INVALID_REQUEST');
+    }
+    for (const url of ['/api/admin/users', '/api/admin/audit-logs', '/api/mushroom-species', '/api/production-facilities']) {
+        for (const query of ['page=1abc', 'limit=0', 'page=9007199254740991']) {
+            const response = await request(`${url}?${query}`);
+            assert.equal(response.status, 400, `${url}?${query}`);
+            assert.equal((await response.json()).code, 'INVALID_REQUEST');
+        }
+    }
+    for (const write of writes) assert.equal(write.mock.callCount(), 0);
+});
+
+test('Prisma uniqueness conflicts share a 409 response and login preserves password spaces', async (t) => {
+    t.mock.method(global.prisma.mushroom, 'create', async () => { throw Object.assign(new Error('private SQL details'), { code: 'P2002' }); });
+    let response = await request('/api/mushroom-species', { method: 'POST', body: JSON.stringify({ scientificName: 'Existing' }) });
+    assert.equal(response.status, 409);
+    assert.equal((await response.json()).code, 'STATE_CONFLICT');
+
+    const lookup = t.mock.method(global.prisma.user, 'findUnique', async () => ({ ...admin, password_hash: ' password ' }));
+    response = await request('/api/login', { method: 'POST', body: JSON.stringify({ username: 'admin', password: ' password ' }) });
+    assert.equal(response.status, 200);
+    lookup.mock.resetCalls();
+    response = await request('/api/login', { method: 'POST', body: JSON.stringify({ username: 'admin', password: [] }) });
+    assert.equal(response.status, 400);
+    assert.equal(lookup.mock.callCount(), 0);
+    response = await request('/api/login', { method: 'POST', body: JSON.stringify({ username: 'admin', password: 'password' }) });
+    assert.equal(response.status, 401);
+    assert.equal((await response.json()).code, 'INVALID_REQUEST');
+});

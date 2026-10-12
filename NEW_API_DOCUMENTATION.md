@@ -2,6 +2,28 @@
 
 Base URL: `http://<backend-host>:8080/api`.
 
+## Quy ước chung cho toàn bộ API
+
+Response thành công giữ cấu trúc hiện có. Mọi lỗi HTTP trong tầng API trả JSON `{ "code": "INVALID_REQUEST", "message": "Dữ liệu không hợp lệ" }`; không trả trường `error` chứa chi tiết nội bộ.
+
+| HTTP | `code` mặc định | Ý nghĩa |
+| --- | --- | --- |
+| 400 | `INVALID_REQUEST` | ID, phân trang, body hoặc bộ lọc sai |
+| 401 | `AUTH_INVALID_TOKEN` với xác thực phiên; `INVALID_REQUEST` với sai thông tin đăng nhập | Cần xác thực hợp lệ |
+| 403 | `AUTH_FORBIDDEN` | Không có quyền |
+| 404 | `INVALID_REQUEST` | Không tìm thấy đối tượng được kiểm tra |
+| 409 | `STATE_CONFLICT` | Trùng dữ liệu, quan hệ hoặc trạng thái xung đột |
+| 422 | `INVALID_REQUEST` | Báo cáo vượt giới hạn xuất |
+| 500, 503 | `INTERNAL_ERROR` | Lỗi máy chủ hoặc classifier không thể tiếp nhận |
+
+Lỗi nghiệp vụ có thể cung cấp code riêng. Lỗi 500 luôn trả `message: "Lỗi máy chủ"`; classifier giữ 503 với thông báo không thể tiếp nhận. Prisma `P2002`, `P2003`, `P2025`, `P2034` mặc định trả 409; lỗi validation của Prisma trả 400, không lộ chi tiết truy vấn.
+
+- ID số phải là số nguyên dương an toàn; `12abc`, `0`, số âm, số thập phân và số vượt giới hạn bị từ chối. ID công việc, submission và lượt classifier tiếp tục là chuỗi.
+- `page` mặc định 1; `limit` mặc định 10, tối đa 50. Audit log, lịch sử classifier và báo cáo dùng mặc định 20, tối đa 100. Limit vượt mức được giới hạn; page/limit sai hoặc offset vượt giới hạn trả 400.
+- Body phải là object, chứa field được hỗ trợ và không rỗng. PATCH growth-progress cho phép chỉ gửi ảnh. Mật khẩu giữ nguyên khoảng trắng và nội dung.
+- Ngày nhận `YYYY-MM-DD` hoặc ISO 8601 có múi giờ, ví dụ `2026-10-01T09:00:00+07:00`. Ngày không tồn tại và timestamp thiếu múi giờ trả 400. Báo cáo giữ đầu/cuối ngày Việt Nam và giới hạn khoảng ngày 5 năm.
+- Upload validation/DB thất bại sẽ xóa file chưa lưu thành công. Classifier thành công vẫn trả 202; báo cáo CSV/XLSX/PDF giữ định dạng và giới hạn dòng.
+
 Khởi động bằng [Docker Compose](RUN_DOCKER.md) hoặc [chạy trực tiếp](RUN_BACKEND.md). Docker giữ nguyên hợp đồng API; nếu đổi `API_PORT`, dùng cổng mới trong Base URL.
 
 Mọi API dưới đây, trừ đăng nhập, gửi header:
@@ -379,3 +401,9 @@ CORS_ALLOWED_ORIGINS=http://localhost:5173,https://app.example.com
 ```
 
 Backend cho phép headers `Authorization`, `Content-Type`, và expose `Content-Disposition` để client đọc tên file export. Nếu biến không đặt, backend dùng `*` cho môi trường phát triển.
+
+## QR và tra cứu mã lô cho nhân viên
+
+GET /api/cultivation-batches/by-code/{batchCode} yêu cầu Bearer token của admin/manager/staff. Mã được trim, dài 1–191 ký tự. Response 200: { data: { id, batchCode } }; invalid trả 400, không tồn tại trả 404. QR chứa batchCode thuần. Khách dùng API public theo mã hiện có; nhân viên resolve ID rồi mở chức năng ghi sinh trưởng/chăm sóc/thu hoạch. Quét không tự ghi dữ liệu.
+
+Lệnh node scripts/publish-mushroom-gallery.cjs chỉ dùng thủ công để công khai các ảnh giống nấm hiện có. Không chạy tự động khi khởi động/seed vì có thể công khai lại ảnh đã được chuyển riêng tư.

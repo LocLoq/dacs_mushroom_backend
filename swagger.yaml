@@ -2,7 +2,17 @@ openapi: 3.0.0
 info:
   title: API Quản lý Nông Trại Nấm
   version: 1.0.0
-  description: Tài liệu API cho Hệ thống Quản lý Nuôi trồng Nấm
+  description: |
+    Tài liệu API cho Hệ thống Quản lý Nuôi trồng Nấm.
+    Lỗi HTTP dùng JSON {code, message}; lỗi 500 không trả chi tiết nội bộ.
+    ID số và page/limit phải là số nguyên dương an toàn; dữ liệu sai trả 400.
+    Phân trang mặc định page=1, limit=10, tối đa 50; audit log, lịch sử classifier
+    và báo cáo dùng limit=20, tối đa 100. Limit vượt mức được giới hạn về mức tối đa.
+    Ngày nhận YYYY-MM-DD hoặc ISO 8601 có múi giờ; ngày không tồn tại bị từ chối.
+    Bộ lọc ngày báo cáo dùng đầu/cuối ngày tại Việt Nam (UTC+07:00), tối đa 5 năm.
+    Body phải là object và chỉ chứa field được hỗ trợ; PATCH growth-progress
+    cho phép body rỗng khi có ảnh. ID công việc, submission và classifier là chuỗi UUID.
+    Xung đột Prisma P2002/P2003/P2025/P2034 mặc định trả 409 STATE_CONFLICT.
 servers:
   - url: /
     description: Máy chủ đang phục vụ Swagger (tự dùng host và cổng hiện tại)
@@ -875,12 +885,15 @@ components:
           readOnly: true
     ErrorResponse:
       type: object
-      required: [message]
+      required: [code, message]
       properties:
+        code:
+          type: string
+          description: Mã lỗi; gồm AUTH_INVALID_TOKEN, AUTH_FORBIDDEN, STATE_CONFLICT, INVALID_REQUEST và INTERNAL_ERROR.
+          example: INVALID_REQUEST
         message:
           type: string
-        error:
-          type: string
+          example: Dữ liệu không hợp lệ
     ClassifierLookup:
       type: object
       properties:
@@ -973,17 +986,24 @@ components:
           type: "integer"
           nullable: true
           readOnly: true
+  responses:
+    ApiError:
+      description: Lỗi API theo HTTP status; code nghiệp vụ và message được trả trong JSON.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
   parameters:
     ReportFrom:
       name: from
       in: query
       schema: { type: string, format: date }
-      description: Ngày bắt đầu, mặc định là đầu năm hiện tại
+      description: YYYY-MM-DD hoặc ISO có múi giờ; ngày bắt đầu dùng 00:00 UTC+07:00, mặc định đầu năm hiện tại.
     ReportTo:
       name: to
       in: query
       schema: { type: string, format: date }
-      description: Ngày kết thúc, mặc định là hôm nay
+      description: YYYY-MM-DD hoặc ISO có múi giờ; ngày kết thúc dùng 23:59:59.999 UTC+07:00, mặc định thời điểm hiện tại.
     FacilityId:
       name: facilityId
       in: query
@@ -1019,11 +1039,16 @@ paths:
                   type: string
                   description: Mật khẩu
       responses:
+        default:
+          $ref: '#/components/responses/ApiError'
         '200':
           description: Đăng nhập thành công, trả về JWT token
         '401':
           description: Tên đăng nhập hoặc mật khẩu không chính xác
-  
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
   /api/mushroom-classifier/classify:
     post:
       summary: Tải ảnh nấm lên để AI phân loại
@@ -1041,6 +1066,8 @@ paths:
                   format: binary
                   description: File hình ảnh của nấm cần phân loại
       responses:
+        default:
+          $ref: '#/components/responses/ApiError'
         '202':
           description: Đã tiếp nhận yêu cầu phân loại
           content:
@@ -1079,6 +1106,8 @@ paths:
           in: query
           schema: { type: string, format: date-time }
       responses:
+        default:
+          $ref: '#/components/responses/ApiError'
         '200':
           description: Danh sách lượt tra cứu
   /api/mushroom-classifier/history/{id}:
@@ -1091,6 +1120,8 @@ paths:
           required: true
           schema: { type: string, format: uuid }
       responses:
+        default:
+          $ref: '#/components/responses/ApiError'
         '200':
           description: Chi tiết lượt tra cứu
   /api/admin/audit-logs:
@@ -1114,6 +1145,8 @@ paths:
           in: query
           schema: { type: string, enum: [SUCCESS, FAILURE] }
       responses:
+        default:
+          $ref: '#/components/responses/ApiError'
         '200':
           description: Danh sách audit log
   /api/reports/overview:
@@ -1127,24 +1160,32 @@ paths:
         - $ref: '#/components/parameters/MushroomId'
         - $ref: '#/components/parameters/GroupBy'
       responses:
+        default:
+          $ref: '#/components/responses/ApiError'
         '200': { description: Thống kê tổng hợp }
   /api/reports/cultivation:
     get:
       summary: Xem báo cáo lô nuôi trồng
       tags: [Báo cáo]
       responses:
+        default:
+          $ref: '#/components/responses/ApiError'
         '200': { description: Báo cáo nuôi trồng có phân trang }
   /api/reports/classifier:
     get:
       summary: Xem báo cáo classifier
       tags: [Báo cáo]
       responses:
+        default:
+          $ref: '#/components/responses/ApiError'
         '200': { description: Báo cáo classifier có phân trang }
   /api/reports/audit:
     get:
       summary: Xem báo cáo hoạt động audit
       tags: [Báo cáo]
       responses:
+        default:
+          $ref: '#/components/responses/ApiError'
         '200': { description: Báo cáo audit có phân trang }
   /api/reports/{type}/export:
     get:
@@ -1160,13 +1201,20 @@ paths:
           required: true
           schema: { type: string, enum: [csv, xlsx, pdf] }
       responses:
+        default:
+          $ref: '#/components/responses/ApiError'
         '200':
           description: File báo cáo
           content:
             text/csv: {}
             application/vnd.openxmlformats-officedocument.spreadsheetml.sheet: {}
             application/pdf: {}
-        '422': { description: Báo cáo quá lớn, cần thu hẹp bộ lọc }
+        '422':
+          description: Báo cáo quá lớn, cần thu hẹp bộ lọc
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
   /api/public/cultivation-batches/{batchCode}/growth-progress/current:
     get:
       summary: Xem tiến trình sinh trưởng hiện tại công khai
@@ -1178,9 +1226,15 @@ paths:
           required: true
           schema: { type: string }
       responses:
+        default:
+          $ref: '#/components/responses/ApiError'
         '200': { description: Tiến trình hiện tại hoặc null nếu chưa có dữ liệu }
-        '404': { description: Không tìm thấy lô }
-
+        '404':
+          description: Không tìm thấy lô
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
   /api/admin/users:
     get:
       summary: Lấy danh sách tài khoản người dùng
@@ -1202,6 +1256,8 @@ paths:
             type: string
           description: Tìm kiếm theo tên đăng nhập hoặc họ tên
       responses:
+        default:
+          $ref: '#/components/responses/ApiError'
         '200':
           description: Danh sách người dùng (kèm phân trang)
     post:
@@ -1234,11 +1290,16 @@ paths:
                   type: integer
                   description: ID của quyền hạn (Role ID)
       responses:
+        default:
+          $ref: '#/components/responses/ApiError'
         '201':
           description: Tài khoản đã được tạo thành công
         '400':
           description: Dữ liệu không hợp lệ hoặc username đã tồn tại
-  
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
   /api/admin/users/{id}:
     put:
       summary: Cập nhật thông tin tài khoản
@@ -1271,6 +1332,8 @@ paths:
                   type: integer
                   description: ID quyền hạn mới
       responses:
+        default:
+          $ref: '#/components/responses/ApiError'
         '200':
           description: Cập nhật tài khoản thành công
     delete:
@@ -1284,6 +1347,8 @@ paths:
             type: integer
           description: ID của người dùng cần xóa
       responses:
+        default:
+          $ref: '#/components/responses/ApiError'
         '200':
           description: Xóa tài khoản thành công
 
@@ -1292,6 +1357,8 @@ paths:
       summary: Lấy danh sách các quyền (Roles)
       tags: [Quản trị viên]
       responses:
+        default:
+          $ref: '#/components/responses/ApiError'
         '200':
           description: Danh sách các quyền có trong hệ thống (admin, manager, staff)
 
@@ -1318,7 +1385,14 @@ paths:
             type: string
           description: Tìm kiếm theo tên khoa học, tên thường gọi, họ, chi
       responses:
-        '401': { description: Token không hợp lệ hoặc hết hạn }
+        default:
+          $ref: '#/components/responses/ApiError'
+        '401':
+          description: Token không hợp lệ hoặc hết hạn
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
         '200':
           description: Danh sách các giống nấm (kèm phân trang)
     post:
@@ -1331,6 +1405,8 @@ paths:
             schema:
               $ref: '#/components/schemas/Mushroom'
       responses:
+        default:
+          $ref: '#/components/responses/ApiError'
         '201':
           description: Thêm giống nấm thành công
   
@@ -1345,7 +1421,14 @@ paths:
       parameters:
         - { name: id, in: path, required: true, schema: { type: integer, minimum: 1 } }
       responses:
-        '401': { description: Token không hợp lệ hoặc hết hạn }
+        default:
+          $ref: '#/components/responses/ApiError'
+        '401':
+          description: Token không hợp lệ hoặc hết hạn
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
         '200':
           description: Chi tiết giống nấm
           content:
@@ -1355,7 +1438,12 @@ paths:
                 properties:
                   data:
                     $ref: '#/components/schemas/Mushroom'
-        '404': { description: Không tìm thấy giống nấm }
+        '404':
+          description: Không tìm thấy giống nấm
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
     put:
       summary: Cập nhật thông tin giống nấm
       tags: [Quản lý Giống Nấm]
@@ -1373,6 +1461,8 @@ paths:
               type: object
               $ref: '#/components/schemas/Mushroom'
       responses:
+        default:
+          $ref: '#/components/responses/ApiError'
         '200':
           description: Cập nhật thông tin thành công
     delete:
@@ -1386,6 +1476,8 @@ paths:
             type: integer
           description: ID của giống nấm cần xóa
       responses:
+        default:
+          $ref: '#/components/responses/ApiError'
         '200':
           description: Xóa giống nấm thành công
 
@@ -1408,6 +1500,8 @@ paths:
             type: string
           description: Tìm kiếm theo tên cơ sở, địa chỉ, mã số thuế
       responses:
+        default:
+          $ref: '#/components/responses/ApiError'
         '200':
           description: Danh sách cơ sở sản xuất (kèm theo các giống nấm đang trồng)
     post:
@@ -1442,6 +1536,8 @@ paths:
                     type: integer
               $ref: '#/components/schemas/ProductionFacility'
       responses:
+        default:
+          $ref: '#/components/responses/ApiError'
         '201':
           description: Tạo cơ sở thành công
   
@@ -1457,6 +1553,8 @@ paths:
             type: integer
           description: ID của cơ sở sản xuất
       responses:
+        default:
+          $ref: '#/components/responses/ApiError'
         '200':
           description: Thông tin chi tiết của cơ sở
     put:
@@ -1482,6 +1580,8 @@ paths:
                     type: integer
               $ref: '#/components/schemas/ProductionFacility'
       responses:
+        default:
+          $ref: '#/components/responses/ApiError'
         '200':
           description: Cập nhật thành công
     delete:
@@ -1495,6 +1595,8 @@ paths:
             type: integer
           description: ID của cơ sở sản xuất cần xóa
       responses:
+        default:
+          $ref: '#/components/responses/ApiError'
         '200':
           description: Xóa cơ sở thành công
 
@@ -1532,6 +1634,8 @@ paths:
             type: string
           description: Lọc theo trạng thái của lô
       responses:
+        default:
+          $ref: '#/components/responses/ApiError'
         '200':
           description: Danh sách các lô nuôi trồng
     post:
@@ -1559,9 +1663,68 @@ paths:
                   description: Ngày bắt đầu (chuỗi định dạng ISO)
               $ref: '#/components/schemas/CultivationBatch'
       responses:
+        default:
+          $ref: '#/components/responses/ApiError'
         '201':
           description: Thêm lô nuôi trồng thành công
   
+  /api/cultivation-batches/by-code/{batchCode}:
+    get:
+      summary: Tìm ID lô từ mã QR
+      description: Tra cứu chính xác mã lô cho admin, manager và staff đã đăng nhập.
+      tags: [Quản lý Lô Nuôi Trồng]
+      parameters:
+        - name: batchCode
+          in: path
+          required: true
+          schema: { type: string, minLength: 1, maxLength: 191 }
+      responses:
+        default:
+          $ref: '#/components/responses/ApiError'
+        '200':
+          description: ID và mã lô
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data:
+                    type: object
+                    required: [id, batchCode]
+                    properties:
+                      id: { type: integer, minimum: 1 }
+                      batchCode: { type: string }
+        '400':
+          description: Mã lô rỗng hoặc quá 191 ký tự
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: Token thiếu hoặc không hợp lệ
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: Không đủ quyền
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Không tìm thấy lô nuôi trồng
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Lỗi máy chủ
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
   /api/cultivation-batches/{id}:
     get:
       summary: Lấy chi tiết lô nuôi trồng
@@ -1574,6 +1737,8 @@ paths:
             type: integer
           description: ID của lô nuôi trồng
       responses:
+        default:
+          $ref: '#/components/responses/ApiError'
         '200':
           description: Thông tin chi tiết của lô
     put:
@@ -1593,6 +1758,8 @@ paths:
               type: object
               $ref: '#/components/schemas/CultivationBatch'
       responses:
+        default:
+          $ref: '#/components/responses/ApiError'
         '200':
           description: Cập nhật thành công
     delete:
@@ -1606,6 +1773,8 @@ paths:
             type: integer
           description: ID của lô nuôi trồng cần xóa
       responses:
+        default:
+          $ref: '#/components/responses/ApiError'
         '200':
           description: Xóa lô thành công
 
@@ -1621,6 +1790,8 @@ paths:
             type: integer
           description: ID của lô nuôi trồng
       responses:
+        default:
+          $ref: '#/components/responses/ApiError'
         '200':
           description: Danh sách nhật ký chấm sóc
     post:
@@ -1651,6 +1822,8 @@ paths:
                   format: date-time
                   description: Thời điểm ghi nhật ký
       responses:
+        default:
+          $ref: '#/components/responses/ApiError'
         '201':
           description: Ghi nhật ký chấm sóc thành công
 
@@ -1666,6 +1839,8 @@ paths:
             type: integer
           description: ID của lô nuôi trồng
       responses:
+        default:
+          $ref: '#/components/responses/ApiError'
         '200':
           description: Danh sách tiến độ sinh trưởng
           content:
@@ -1757,6 +1932,8 @@ paths:
                     type: string
                     format: binary
       responses:
+        default:
+          $ref: '#/components/responses/ApiError'
         '201':
           description: Cập nhật tiến độ sinh trưởng thành công
           content:
@@ -1799,7 +1976,6 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
-
   /api/cultivation-batches/{id}/growth-progress/{recordId}:
     patch:
       summary: Cập nhật một bản ghi tiến độ sinh trưởng
@@ -1856,6 +2032,8 @@ paths:
                     type: string
                     format: binary
       responses:
+        default:
+          $ref: '#/components/responses/ApiError'
         '200':
           description: Cập nhật bản ghi tiến độ sinh trưởng thành công
           content:
@@ -1898,7 +2076,6 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
-
   /api/cultivation-batches/{id}/harvests:
     get:
       summary: Lấy nhật ký thu hoạch của lô nuôi trồng
@@ -1911,6 +2088,8 @@ paths:
             type: integer
           description: ID của lô nuôi trồng
       responses:
+        default:
+          $ref: '#/components/responses/ApiError'
         '200':
           description: Danh sách các lần thu hoạch
     post:
@@ -1947,6 +2126,8 @@ paths:
                   type: boolean
                   description: Có đánh dấu lô đã hoàn tất hay không
       responses:
+        default:
+          $ref: '#/components/responses/ApiError'
         '201':
           description: Ghi nhận thu hoạch thành công
 
@@ -1955,17 +2136,24 @@ paths:
       summary: Lấy người dùng và quyền hiện tại từ phiên đăng nhập
       tags: [Xác thực]
       responses:
+        default:
+          $ref: '#/components/responses/ApiError'
         '200':
           description: Thông tin người dùng hiện tại
         '401':
           description: Token không hợp lệ, trả code AUTH_INVALID_TOKEN
-
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
   /api/dashboard/tasks:
     get:
       summary: "Danh sách công việc; mặc định TODO, IN_PROGRESS, PENDING_REVIEW"
       tags: ["Dashboard"]
       parameters: [{"name":"page","in":"query","schema":{"type":"integer","minimum":1,"default":1}},{"name":"limit","in":"query","schema":{"type":"integer","minimum":1,"default":10,"maximum":50}},{"name":"search","in":"query","schema":{"type":"string"}},{"name":"batchId","in":"query","schema":{"type":"integer","minimum":1}},{"name":"assigneeUserId","in":"query","schema":{"type":"integer","minimum":1}},{"name":"status","in":"query","schema":{"type":"string","enum":["TODO","IN_PROGRESS","PENDING_REVIEW","COMPLETED","CANCELLED","ALL"]}}]
       responses:
+        default:
+          $ref: '#/components/responses/ApiError'
         "200":
           description: "Thành công"
           content:
@@ -1981,16 +2169,40 @@ paths:
                     $ref: "#/components/schemas/Pagination"
         "400":
           description: "Dữ liệu không hợp lệ"
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
         "401":
           description: "Token thiếu hoặc không hợp lệ"
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
         "403":
           description: "Không đủ quyền"
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
         "404":
           description: "Không tìm thấy dữ liệu"
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
         "409":
           description: "Dữ liệu/trạng thái thay đổi; tải lại trước khi thử lại"
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
         "500":
           description: "Lỗi máy chủ"
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
     post:
       summary: "Tạo việc TODO (manager/admin)"
       tags: ["Dashboard"]
@@ -2002,6 +2214,8 @@ paths:
             schema:
               $ref: "#/components/schemas/TaskCreateInput"
       responses:
+        default:
+          $ref: '#/components/responses/ApiError'
         "201":
           description: "Thành công"
           content:
@@ -2015,22 +2229,48 @@ paths:
                     $ref: "#/components/schemas/Task"
         "400":
           description: "Dữ liệu không hợp lệ"
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
         "401":
           description: "Token thiếu hoặc không hợp lệ"
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
         "403":
           description: "Không đủ quyền"
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
         "404":
           description: "Không tìm thấy dữ liệu"
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
         "409":
           description: "Dữ liệu/trạng thái thay đổi; tải lại trước khi thử lại"
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
         "500":
           description: "Lỗi máy chủ"
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
   /api/dashboard/tasks/{id}:
     get:
       summary: "Chi tiết công việc và lịch sử minh chứng"
       tags: ["Dashboard"]
       parameters: [{"name":"id","in":"path","required":true,"schema":{"type":"string","format":"uuid"}}]
       responses:
+        default:
+          $ref: '#/components/responses/ApiError'
         "200":
           description: "Thành công"
           content:
@@ -2044,16 +2284,40 @@ paths:
                     $ref: "#/components/schemas/TaskDetail"
         "400":
           description: "Dữ liệu không hợp lệ"
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
         "401":
           description: "Token thiếu hoặc không hợp lệ"
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
         "403":
           description: "Không đủ quyền"
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
         "404":
           description: "Không tìm thấy dữ liệu"
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
         "409":
           description: "Dữ liệu/trạng thái thay đổi; tải lại trước khi thử lại"
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
         "500":
           description: "Lỗi máy chủ"
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
     patch:
       summary: "Cập nhật việc; không hoàn thành/chờ duyệt trực tiếp"
       tags: ["Dashboard"]
@@ -2065,6 +2329,8 @@ paths:
             schema:
               $ref: "#/components/schemas/TaskUpdateInput"
       responses:
+        default:
+          $ref: '#/components/responses/ApiError'
         "200":
           description: "Thành công"
           content:
@@ -2078,41 +2344,92 @@ paths:
                     $ref: "#/components/schemas/Task"
         "400":
           description: "Dữ liệu không hợp lệ"
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
         "401":
           description: "Token thiếu hoặc không hợp lệ"
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
         "403":
           description: "Không đủ quyền"
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
         "404":
           description: "Không tìm thấy dữ liệu"
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
         "409":
           description: "Dữ liệu/trạng thái thay đổi; tải lại trước khi thử lại"
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
         "500":
           description: "Lỗi máy chủ"
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
     delete:
       summary: "Xóa việc chưa có lịch sử minh chứng (manager/admin)"
       tags: ["Dashboard"]
       parameters: [{"name":"id","in":"path","required":true,"schema":{"type":"string","format":"uuid"}}]
       responses:
+        default:
+          $ref: '#/components/responses/ApiError'
         "200":
           description: "Đã xóa"
         "400":
           description: "Dữ liệu không hợp lệ"
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
         "401":
           description: "Token thiếu hoặc không hợp lệ"
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
         "403":
           description: "Không đủ quyền"
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
         "404":
           description: "Không tìm thấy dữ liệu"
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
         "409":
           description: "Dữ liệu/trạng thái thay đổi; tải lại trước khi thử lại"
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
         "500":
           description: "Lỗi máy chủ"
-
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
   /api/dashboard/task-assignees:
     get:
       summary: Danh sách người có thể được giao việc
       tags: [Dashboard]
       responses:
+        default:
+          $ref: '#/components/responses/ApiError'
         '200': { description: Danh sách người dùng phân trang }
 
   /api/dashboard/tasks/{id}/evidence-candidates:
@@ -2121,6 +2438,8 @@ paths:
       tags: ["Dashboard"]
       parameters: [{"name":"id","in":"path","required":true,"schema":{"type":"string","format":"uuid"}},{"name":"page","in":"query","schema":{"type":"integer","minimum":1,"default":1}},{"name":"limit","in":"query","schema":{"type":"integer","minimum":1,"default":10,"maximum":50}},{"name":"type","in":"query","schema":{"type":"string","enum":["CARE_LOG","GROWTH_PROGRESS","HARVEST"]}}]
       responses:
+        default:
+          $ref: '#/components/responses/ApiError'
         "200":
           description: "Thành công"
           content:
@@ -2136,16 +2455,40 @@ paths:
                     $ref: "#/components/schemas/Pagination"
         "400":
           description: "Dữ liệu không hợp lệ"
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
         "401":
           description: "Token thiếu hoặc không hợp lệ"
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
         "403":
           description: "Không đủ quyền"
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
         "404":
           description: "Không tìm thấy dữ liệu"
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
         "409":
           description: "Dữ liệu/trạng thái thay đổi; tải lại trước khi thử lại"
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
         "500":
           description: "Lỗi máy chủ"
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
   /api/dashboard/tasks/{id}/submissions:
     post:
       summary: "Gửi minh chứng; chuyển sang PENDING_REVIEW"
@@ -2158,6 +2501,8 @@ paths:
             schema:
               $ref: "#/components/schemas/TaskSubmissionInput"
       responses:
+        default:
+          $ref: '#/components/responses/ApiError'
         "201":
           description: "Thành công"
           content:
@@ -2171,16 +2516,40 @@ paths:
                     $ref: "#/components/schemas/TaskSubmission"
         "400":
           description: "Dữ liệu không hợp lệ"
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
         "401":
           description: "Token thiếu hoặc không hợp lệ"
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
         "403":
           description: "Không đủ quyền"
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
         "404":
           description: "Không tìm thấy dữ liệu"
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
         "409":
           description: "Dữ liệu/trạng thái thay đổi; tải lại trước khi thử lại"
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
         "500":
           description: "Lỗi máy chủ"
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
   /api/dashboard/tasks/{id}/submissions/{submissionId}/review:
     post:
       summary: "Manager/admin duyệt hoặc trả lại; không tự duyệt"
@@ -2193,6 +2562,8 @@ paths:
             schema:
               $ref: "#/components/schemas/TaskReviewInput"
       responses:
+        default:
+          $ref: '#/components/responses/ApiError'
         "200":
           description: "Thành công"
           content:
@@ -2206,22 +2577,48 @@ paths:
                     $ref: "#/components/schemas/TaskSubmission"
         "400":
           description: "Dữ liệu không hợp lệ"
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
         "401":
           description: "Token thiếu hoặc không hợp lệ"
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
         "403":
           description: "Không đủ quyền"
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
         "404":
           description: "Không tìm thấy dữ liệu"
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
         "409":
           description: "Dữ liệu/trạng thái thay đổi; tải lại trước khi thử lại"
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
         "500":
           description: "Lỗi máy chủ"
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
   /api/cultivation-batches/{id}/financial-summary:
     get:
       summary: "Tài chính toàn bộ vòng đời lô (manager/admin)"
       tags: ["Tài chính"]
       parameters: [{"name":"id","in":"path","required":true,"schema":{"type":"integer","minimum":1}}]
       responses:
+        default:
+          $ref: '#/components/responses/ApiError'
         "200":
           description: "Thành công"
           content:
@@ -2235,22 +2632,48 @@ paths:
                     allOf: [{"$ref":"#/components/schemas/FinancialSummary"},{"type":"object","properties":{"batchId":{"type":"integer","minimum":1}}}]
         "400":
           description: "Dữ liệu không hợp lệ"
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
         "401":
           description: "Token thiếu hoặc không hợp lệ"
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
         "403":
           description: "Không đủ quyền"
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
         "404":
           description: "Không tìm thấy dữ liệu"
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
         "409":
           description: "Dữ liệu/trạng thái thay đổi; tải lại trước khi thử lại"
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
         "500":
           description: "Lỗi máy chủ"
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
   /api/reports/financial:
     get:
       summary: "Báo cáo tài chính theo ngày bán/ngày chi (manager/admin)"
       tags: ["Tài chính"]
       parameters: [{"$ref":"#/components/parameters/ReportFrom"},{"$ref":"#/components/parameters/ReportTo"},{"$ref":"#/components/parameters/FacilityId"},{"$ref":"#/components/parameters/MushroomId"},{"$ref":"#/components/parameters/GroupBy"},{"name":"status","in":"query","schema":{"type":"string","enum":["PREPARATION","INCUBATION","FRUITING","HARVESTING","COMPLETED","FAILED"]}},{"name":"page","in":"query","schema":{"type":"integer","minimum":1,"default":1}},{"name":"limit","in":"query","schema":{"type":"integer","minimum":1,"default":20,"maximum":100}}]
       responses:
+        default:
+          $ref: '#/components/responses/ApiError'
         "200":
           description: "Thành công"
           content:
@@ -2284,22 +2707,48 @@ paths:
                         enum: ["day","month"]
         "400":
           description: "Dữ liệu không hợp lệ"
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
         "401":
           description: "Token thiếu hoặc không hợp lệ"
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
         "403":
           description: "Không đủ quyền"
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
         "404":
           description: "Không tìm thấy dữ liệu"
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
         "409":
           description: "Dữ liệu/trạng thái thay đổi; tải lại trước khi thử lại"
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
         "500":
           description: "Lỗi máy chủ"
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
   /api/cultivation-batches/{id}/expenses:
     get:
       summary: "Danh sách expenses (manager/admin)"
       tags: ["Tài chính"]
       parameters: [{"name":"id","in":"path","required":true,"schema":{"type":"integer","minimum":1}},{"name":"page","in":"query","schema":{"type":"integer","minimum":1,"default":1}},{"name":"limit","in":"query","schema":{"type":"integer","minimum":1,"default":10,"maximum":50}}]
       responses:
+        default:
+          $ref: '#/components/responses/ApiError'
         "200":
           description: "Thành công"
           content:
@@ -2315,16 +2764,40 @@ paths:
                     $ref: "#/components/schemas/Pagination"
         "400":
           description: "Dữ liệu không hợp lệ"
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
         "401":
           description: "Token thiếu hoặc không hợp lệ"
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
         "403":
           description: "Không đủ quyền"
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
         "404":
           description: "Không tìm thấy dữ liệu"
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
         "409":
           description: "Dữ liệu/trạng thái thay đổi; tải lại trước khi thử lại"
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
         "500":
           description: "Lỗi máy chủ"
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
     post:
       summary: "Tạo expenses (manager/admin)"
       tags: ["Tài chính"]
@@ -2336,6 +2809,8 @@ paths:
             schema:
               $ref: "#/components/schemas/ExpenseInput"
       responses:
+        default:
+          $ref: '#/components/responses/ApiError'
         "201":
           description: "Thành công"
           content:
@@ -2349,16 +2824,40 @@ paths:
                     $ref: "#/components/schemas/BatchExpense"
         "400":
           description: "Dữ liệu không hợp lệ"
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
         "401":
           description: "Token thiếu hoặc không hợp lệ"
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
         "403":
           description: "Không đủ quyền"
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
         "404":
           description: "Không tìm thấy dữ liệu"
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
         "409":
           description: "Dữ liệu/trạng thái thay đổi; tải lại trước khi thử lại"
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
         "500":
           description: "Lỗi máy chủ"
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
   /api/cultivation-batches/{id}/expenses/{entryId}:
     patch:
       summary: "Sửa expenses (manager/admin)"
@@ -2371,6 +2870,8 @@ paths:
             schema:
               $ref: "#/components/schemas/ExpenseUpdateInput"
       responses:
+        default:
+          $ref: '#/components/responses/ApiError'
         "200":
           description: "Thành công"
           content:
@@ -2384,41 +2885,93 @@ paths:
                     $ref: "#/components/schemas/BatchExpense"
         "400":
           description: "Dữ liệu không hợp lệ"
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
         "401":
           description: "Token thiếu hoặc không hợp lệ"
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
         "403":
           description: "Không đủ quyền"
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
         "404":
           description: "Không tìm thấy dữ liệu"
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
         "409":
           description: "Dữ liệu/trạng thái thay đổi; tải lại trước khi thử lại"
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
         "500":
           description: "Lỗi máy chủ"
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
     delete:
       summary: "Xóa expenses (manager/admin)"
       tags: ["Tài chính"]
       parameters: [{"name":"id","in":"path","required":true,"schema":{"type":"integer","minimum":1}},{"name":"entryId","in":"path","required":true,"schema":{"type":"integer","minimum":1}}]
       responses:
+        default:
+          $ref: '#/components/responses/ApiError'
         "200":
           description: "Đã xóa"
         "400":
           description: "Dữ liệu không hợp lệ"
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
         "401":
           description: "Token thiếu hoặc không hợp lệ"
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
         "403":
           description: "Không đủ quyền"
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
         "404":
           description: "Không tìm thấy dữ liệu"
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
         "409":
           description: "Dữ liệu/trạng thái thay đổi; tải lại trước khi thử lại"
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
         "500":
           description: "Lỗi máy chủ"
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
   /api/cultivation-batches/{id}/sales:
     get:
       summary: "Danh sách sales (manager/admin)"
       tags: ["Tài chính"]
       parameters: [{"name":"id","in":"path","required":true,"schema":{"type":"integer","minimum":1}},{"name":"page","in":"query","schema":{"type":"integer","minimum":1,"default":1}},{"name":"limit","in":"query","schema":{"type":"integer","minimum":1,"default":10,"maximum":50}}]
       responses:
+        default:
+          $ref: '#/components/responses/ApiError'
         "200":
           description: "Thành công"
           content:
@@ -2434,16 +2987,40 @@ paths:
                     $ref: "#/components/schemas/Pagination"
         "400":
           description: "Dữ liệu không hợp lệ"
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
         "401":
           description: "Token thiếu hoặc không hợp lệ"
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
         "403":
           description: "Không đủ quyền"
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
         "404":
           description: "Không tìm thấy dữ liệu"
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
         "409":
           description: "Dữ liệu/trạng thái thay đổi; tải lại trước khi thử lại"
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
         "500":
           description: "Lỗi máy chủ"
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
     post:
       summary: "Tạo sales (manager/admin)"
       tags: ["Tài chính"]
@@ -2455,6 +3032,8 @@ paths:
             schema:
               $ref: "#/components/schemas/SaleInput"
       responses:
+        default:
+          $ref: '#/components/responses/ApiError'
         "201":
           description: "Thành công"
           content:
@@ -2468,16 +3047,40 @@ paths:
                     $ref: "#/components/schemas/BatchSale"
         "400":
           description: "Dữ liệu không hợp lệ"
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
         "401":
           description: "Token thiếu hoặc không hợp lệ"
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
         "403":
           description: "Không đủ quyền"
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
         "404":
           description: "Không tìm thấy dữ liệu"
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
         "409":
           description: "Dữ liệu/trạng thái thay đổi; tải lại trước khi thử lại"
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
         "500":
           description: "Lỗi máy chủ"
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
   /api/cultivation-batches/{id}/sales/{entryId}:
     patch:
       summary: "Sửa sales (manager/admin)"
@@ -2490,6 +3093,8 @@ paths:
             schema:
               $ref: "#/components/schemas/SaleUpdateInput"
       responses:
+        default:
+          $ref: '#/components/responses/ApiError'
         "200":
           description: "Thành công"
           content:
@@ -2503,35 +3108,85 @@ paths:
                     $ref: "#/components/schemas/BatchSale"
         "400":
           description: "Dữ liệu không hợp lệ"
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
         "401":
           description: "Token thiếu hoặc không hợp lệ"
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
         "403":
           description: "Không đủ quyền"
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
         "404":
           description: "Không tìm thấy dữ liệu"
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
         "409":
           description: "Dữ liệu/trạng thái thay đổi; tải lại trước khi thử lại"
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
         "500":
           description: "Lỗi máy chủ"
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
     delete:
       summary: "Xóa sales (manager/admin)"
       tags: ["Tài chính"]
       parameters: [{"name":"id","in":"path","required":true,"schema":{"type":"integer","minimum":1}},{"name":"entryId","in":"path","required":true,"schema":{"type":"integer","minimum":1}}]
       responses:
+        default:
+          $ref: '#/components/responses/ApiError'
         "200":
           description: "Đã xóa"
         "400":
           description: "Dữ liệu không hợp lệ"
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
         "401":
           description: "Token thiếu hoặc không hợp lệ"
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
         "403":
           description: "Không đủ quyền"
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
         "404":
           description: "Không tìm thấy dữ liệu"
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
         "409":
           description: "Dữ liệu/trạng thái thay đổi; tải lại trước khi thử lại"
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
         "500":
           description: "Lỗi máy chủ"
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
   /api/production-facilities/{id}/images:
     get:
       summary: "Xem gallery (xác thực tùy chọn)"
@@ -2542,6 +3197,8 @@ paths:
       tags: ["Gallery"]
       parameters: [{"name":"id","in":"path","required":true,"schema":{"type":"integer","minimum":1}},{"name":"page","in":"query","schema":{"type":"integer","minimum":1,"default":1}},{"name":"limit","in":"query","schema":{"type":"integer","minimum":1,"default":10,"maximum":50}}]
       responses:
+        default:
+          $ref: '#/components/responses/ApiError'
         "200":
           description: "Thành công"
           content:
@@ -2559,14 +3216,34 @@ paths:
                     $ref: "#/components/schemas/Pagination"
         "400":
           description: "Dữ liệu không hợp lệ"
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
         "401":
           description: "Token không hợp lệ hoặc hết hạn"
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
         "404":
           description: "Không tìm thấy dữ liệu"
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
         "409":
           description: "Dữ liệu/trạng thái thay đổi; tải lại trước khi thử lại"
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
         "500":
           description: "Lỗi máy chủ"
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
     post:
       summary: "Thêm ảnh gallery (manager/admin)"
       tags: ["Gallery"]
@@ -2595,6 +3272,8 @@ paths:
                   default: false
                   description: Áp dụng cho tất cả ảnh trong lần tải. Gửi multipart true hoặc false; mặc định riêng tư.
       responses:
+        default:
+          $ref: '#/components/responses/ApiError'
         "201":
           description: "Thành công"
           content:
@@ -2610,16 +3289,40 @@ paths:
                       $ref: "#/components/schemas/GalleryImage"
         "400":
           description: "Dữ liệu không hợp lệ"
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
         "401":
           description: "Token thiếu hoặc không hợp lệ"
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
         "403":
           description: "Không đủ quyền"
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
         "404":
           description: "Không tìm thấy dữ liệu"
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
         "409":
           description: "Dữ liệu/trạng thái thay đổi; tải lại trước khi thử lại"
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
         "500":
           description: "Lỗi máy chủ"
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
   /api/production-facilities/{id}/images/{imageId}:
     patch:
       summary: "Đổi chú thích/ảnh bìa/trạng thái công khai (manager/admin)"
@@ -2632,6 +3335,8 @@ paths:
             schema:
               $ref: "#/components/schemas/GalleryImageUpdateInput"
       responses:
+        default:
+          $ref: '#/components/responses/ApiError'
         "200":
           description: "Thành công"
           content:
@@ -2645,35 +3350,85 @@ paths:
                     $ref: "#/components/schemas/GalleryImage"
         "400":
           description: "Dữ liệu không hợp lệ"
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
         "401":
           description: "Token thiếu hoặc không hợp lệ"
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
         "403":
           description: "Không đủ quyền"
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
         "404":
           description: "Không tìm thấy dữ liệu"
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
         "409":
           description: "Dữ liệu/trạng thái thay đổi; tải lại trước khi thử lại"
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
         "500":
           description: "Lỗi máy chủ"
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
     delete:
       summary: "Xóa ảnh, tự chọn bìa thay thế (manager/admin)"
       tags: ["Gallery"]
       parameters: [{"name":"id","in":"path","required":true,"schema":{"type":"integer","minimum":1}},{"name":"imageId","in":"path","required":true,"schema":{"type":"integer","minimum":1}}]
       responses:
+        default:
+          $ref: '#/components/responses/ApiError'
         "200":
           description: "Đã xóa"
         "400":
           description: "Dữ liệu không hợp lệ"
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
         "401":
           description: "Token thiếu hoặc không hợp lệ"
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
         "403":
           description: "Không đủ quyền"
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
         "404":
           description: "Không tìm thấy dữ liệu"
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
         "409":
           description: "Dữ liệu/trạng thái thay đổi; tải lại trước khi thử lại"
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
         "500":
           description: "Lỗi máy chủ"
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
   /api/mushroom-species/{id}/images:
     get:
       summary: "Xem gallery (xác thực tùy chọn)"
@@ -2684,6 +3439,8 @@ paths:
       tags: ["Gallery"]
       parameters: [{"name":"id","in":"path","required":true,"schema":{"type":"integer","minimum":1}},{"name":"page","in":"query","schema":{"type":"integer","minimum":1,"default":1}},{"name":"limit","in":"query","schema":{"type":"integer","minimum":1,"default":10,"maximum":50}}]
       responses:
+        default:
+          $ref: '#/components/responses/ApiError'
         "200":
           description: "Thành công"
           content:
@@ -2701,14 +3458,34 @@ paths:
                     $ref: "#/components/schemas/Pagination"
         "400":
           description: "Dữ liệu không hợp lệ"
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
         "401":
           description: "Token không hợp lệ hoặc hết hạn"
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
         "404":
           description: "Không tìm thấy dữ liệu"
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
         "409":
           description: "Dữ liệu/trạng thái thay đổi; tải lại trước khi thử lại"
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
         "500":
           description: "Lỗi máy chủ"
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
     post:
       summary: "Thêm ảnh gallery (manager/admin)"
       tags: ["Gallery"]
@@ -2737,6 +3514,8 @@ paths:
                   default: false
                   description: Áp dụng cho tất cả ảnh trong lần tải. Gửi multipart true hoặc false; mặc định riêng tư.
       responses:
+        default:
+          $ref: '#/components/responses/ApiError'
         "201":
           description: "Thành công"
           content:
@@ -2752,16 +3531,40 @@ paths:
                       $ref: "#/components/schemas/GalleryImage"
         "400":
           description: "Dữ liệu không hợp lệ"
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
         "401":
           description: "Token thiếu hoặc không hợp lệ"
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
         "403":
           description: "Không đủ quyền"
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
         "404":
           description: "Không tìm thấy dữ liệu"
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
         "409":
           description: "Dữ liệu/trạng thái thay đổi; tải lại trước khi thử lại"
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
         "500":
           description: "Lỗi máy chủ"
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
   /api/mushroom-species/{id}/images/{imageId}:
     patch:
       summary: "Đổi chú thích/ảnh bìa/trạng thái công khai (manager/admin)"
@@ -2774,6 +3577,8 @@ paths:
             schema:
               $ref: "#/components/schemas/GalleryImageUpdateInput"
       responses:
+        default:
+          $ref: '#/components/responses/ApiError'
         "200":
           description: "Thành công"
           content:
@@ -2787,35 +3592,85 @@ paths:
                     $ref: "#/components/schemas/GalleryImage"
         "400":
           description: "Dữ liệu không hợp lệ"
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
         "401":
           description: "Token thiếu hoặc không hợp lệ"
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
         "403":
           description: "Không đủ quyền"
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
         "404":
           description: "Không tìm thấy dữ liệu"
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
         "409":
           description: "Dữ liệu/trạng thái thay đổi; tải lại trước khi thử lại"
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
         "500":
           description: "Lỗi máy chủ"
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
     delete:
       summary: "Xóa ảnh, tự chọn bìa thay thế (manager/admin)"
       tags: ["Gallery"]
       parameters: [{"name":"id","in":"path","required":true,"schema":{"type":"integer","minimum":1}},{"name":"imageId","in":"path","required":true,"schema":{"type":"integer","minimum":1}}]
       responses:
+        default:
+          $ref: '#/components/responses/ApiError'
         "200":
           description: "Đã xóa"
         "400":
           description: "Dữ liệu không hợp lệ"
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
         "401":
           description: "Token thiếu hoặc không hợp lệ"
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
         "403":
           description: "Không đủ quyền"
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
         "404":
           description: "Không tìm thấy dữ liệu"
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
         "409":
           description: "Dữ liệu/trạng thái thay đổi; tải lại trước khi thử lại"
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
         "500":
           description: "Lỗi máy chủ"
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
   /api/cultivation-batches/{id}/images:
     get:
       summary: "Xem gallery (xác thực tùy chọn)"
@@ -2826,6 +3681,8 @@ paths:
       tags: ["Gallery"]
       parameters: [{"name":"id","in":"path","required":true,"schema":{"type":"integer","minimum":1}},{"name":"page","in":"query","schema":{"type":"integer","minimum":1,"default":1}},{"name":"limit","in":"query","schema":{"type":"integer","minimum":1,"default":10,"maximum":50}}]
       responses:
+        default:
+          $ref: '#/components/responses/ApiError'
         "200":
           description: "Thành công"
           content:
@@ -2843,14 +3700,34 @@ paths:
                     $ref: "#/components/schemas/Pagination"
         "400":
           description: "Dữ liệu không hợp lệ"
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
         "401":
           description: "Token không hợp lệ hoặc hết hạn"
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
         "404":
           description: "Không tìm thấy dữ liệu"
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
         "409":
           description: "Dữ liệu/trạng thái thay đổi; tải lại trước khi thử lại"
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
         "500":
           description: "Lỗi máy chủ"
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
     post:
       summary: "Thêm ảnh gallery (manager/admin)"
       tags: ["Gallery"]
@@ -2879,6 +3756,8 @@ paths:
                   default: false
                   description: Áp dụng cho tất cả ảnh trong lần tải. Gửi multipart true hoặc false; mặc định riêng tư.
       responses:
+        default:
+          $ref: '#/components/responses/ApiError'
         "201":
           description: "Thành công"
           content:
@@ -2894,16 +3773,40 @@ paths:
                       $ref: "#/components/schemas/GalleryImage"
         "400":
           description: "Dữ liệu không hợp lệ"
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
         "401":
           description: "Token thiếu hoặc không hợp lệ"
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
         "403":
           description: "Không đủ quyền"
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
         "404":
           description: "Không tìm thấy dữ liệu"
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
         "409":
           description: "Dữ liệu/trạng thái thay đổi; tải lại trước khi thử lại"
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
         "500":
           description: "Lỗi máy chủ"
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
   /api/cultivation-batches/{id}/images/{imageId}:
     patch:
       summary: "Đổi chú thích/ảnh bìa/trạng thái công khai (manager/admin)"
@@ -2916,6 +3819,8 @@ paths:
             schema:
               $ref: "#/components/schemas/GalleryImageUpdateInput"
       responses:
+        default:
+          $ref: '#/components/responses/ApiError'
         "200":
           description: "Thành công"
           content:
@@ -2929,32 +3834,82 @@ paths:
                     $ref: "#/components/schemas/GalleryImage"
         "400":
           description: "Dữ liệu không hợp lệ"
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
         "401":
           description: "Token thiếu hoặc không hợp lệ"
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
         "403":
           description: "Không đủ quyền"
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
         "404":
           description: "Không tìm thấy dữ liệu"
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
         "409":
           description: "Dữ liệu/trạng thái thay đổi; tải lại trước khi thử lại"
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
         "500":
           description: "Lỗi máy chủ"
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
     delete:
       summary: "Xóa ảnh, tự chọn bìa thay thế (manager/admin)"
       tags: ["Gallery"]
       parameters: [{"name":"id","in":"path","required":true,"schema":{"type":"integer","minimum":1}},{"name":"imageId","in":"path","required":true,"schema":{"type":"integer","minimum":1}}]
       responses:
+        default:
+          $ref: '#/components/responses/ApiError'
         "200":
           description: "Đã xóa"
         "400":
           description: "Dữ liệu không hợp lệ"
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
         "401":
           description: "Token thiếu hoặc không hợp lệ"
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
         "403":
           description: "Không đủ quyền"
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
         "404":
           description: "Không tìm thấy dữ liệu"
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
         "409":
           description: "Dữ liệu/trạng thái thay đổi; tải lại trước khi thử lại"
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
         "500":
           description: "Lỗi máy chủ"
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'

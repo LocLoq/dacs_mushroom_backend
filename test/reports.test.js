@@ -54,3 +54,13 @@ test('report export returns XLSX and PDF files', async () => {
     assert.equal(response.status, 200);
     assert.equal(body.subarray(0, 4).toString(), '%PDF');
 });
+
+test('report row-limit errors retain 422 and the common error envelope', async (t) => {
+    const [batch] = await global.prisma.cultivationBatch.findMany();
+    t.mock.method(global.prisma.cultivationBatch, 'findMany', async () => Array(2001).fill(batch));
+    const response = await requestExport('pdf');
+    assert.equal(response.status, 422);
+    const body = await response.json();
+    assert.equal(body.code, 'INVALID_REQUEST');
+    assert.match(body.message, /2\.000/);
+});

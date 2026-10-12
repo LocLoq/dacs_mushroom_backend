@@ -26,7 +26,7 @@ const galleryMediaAccess = (req, res, next) => {
         const matches = await Promise.all(['facilityImage', 'mushroomImage', 'batchImage'].map((model) => global.prisma[model].findFirst({ where, select: { id: true } })));
         if (!matches.some(Boolean)) return res.sendStatus(404);
         next();
-    })(req, res));
+    })(req, res, next));
 };
 
 module.exports = { galleryMediaAccess };

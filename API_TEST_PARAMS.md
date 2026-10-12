@@ -278,3 +278,9 @@ Upload gallery bằng manager: POST multipart `images` (1–5 ảnh), `caption` 
 Chọn ảnh bìa bằng PATCH `.../images/{imageId}` với `{ "isCover": true }`. Công khai ảnh bằng `{ "isPublic": true }`, chuyển riêng tư bằng `{ "isPublic": false }` (JSON boolean). Staff được GET nhưng không upload/sửa/xóa.
 
 GET không gửi Authorization chỉ thấy ảnh `isPublic=true` với `id`, `imageUrl`, `caption`, `isCover`; phân trang chỉ tính ảnh public. Gửi Bearer token hợp lệ để xem tất cả ảnh với đầy đủ metadata, gồm `originalName`, `uploadedByUserId`, `createdAt`, `isPublic`. Token sai/hết hạn trả `401`. URL `/uploads/gallery/...` của ảnh riêng tư cũng cần Bearer token hợp lệ.
+
+## QR lô nuôi trồng
+
+QR chứa nguyên batchCode, ví dụ DEMO-BATCH-001. Khách gọi GET /api/public/cultivation-batches/{batchCode}/growth-progress/current không gửi Authorization. Nhân viên gửi Bearer token tới GET /api/cultivation-batches/by-code/{batchCode}, nhận { data: { id, batchCode } }, rồi mở sinh trưởng/chăm sóc/thu hoạch theo ID. Encode mã thành một path segment đúng một lần, gồm cả dấu cách, /, #, ?, %. API trim mã; rỗng/quá 191 ký tự trả 400, không tồn tại trả 404.
+
+Frontend mặc định upload ảnh giống nấm public, ảnh cơ sở/lô private; backend mặc định private khi không gửi isPublic. Công khai toàn bộ ảnh giống nấm hiện có bằng lệnh thủ công một lần: node scripts/publish-mushroom-gallery.cjs. Không gắn lệnh này vào startup hoặc seed.

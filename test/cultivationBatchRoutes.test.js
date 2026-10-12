@@ -45,3 +45,22 @@ test('batch and harvest routes reject malformed numeric values and dates', async
     response = await request('/1/harvests', { method: 'POST', body: JSON.stringify({ totalYieldKg: 1, harvestedAt: 'not-a-date' }) });
     assert.equal(response.status, 400);
 });
+
+test('batch helpers reject invalid IDs, filters and body fields before writing', async (t) => {
+    const create = t.mock.method(global.prisma.cultivationBatch, 'create');
+    const transaction = t.mock.method(global.prisma, '$transaction');
+    for (const url of ['/1abc', '/1abc/care-logs', '/1abc/harvests', '/?page=1abc', '/?limit=0', '/?facilityId=1abc', '/?mushroomId=0']) {
+        const response = await request(url);
+        assert.equal(response.status, 400, url);
+        assert.equal((await response.json()).code, 'INVALID_REQUEST');
+    }
+    for (const body of [[], { batchCode: 'Demo', metadata: {} }, { batchCode: 'Demo', facilityId: '1abc' }, { batchCode: 'Demo', startDate: '2026-02-30' }, { batchCode: 'Demo', startDate: '2026-10-01T08:00:00' }, { batchCode: 'Demo', actualYieldKg: '12kg' }]) {
+        const response = await request('/', { method: 'POST', body: JSON.stringify(body) });
+        assert.equal(response.status, 400);
+        assert.equal((await response.json()).code, 'INVALID_REQUEST');
+    }
+    const response = await request('/1/harvests', { method: 'POST', body: JSON.stringify({ totalYieldKg: 1, notes: [] }) });
+    assert.equal(response.status, 400);
+    assert.equal(create.mock.callCount(), 0);
+    assert.equal(transaction.mock.callCount(), 0);
+});

@@ -200,3 +200,56 @@ test('PATCH rejects invalid data and records outside the batch', async () => {
     assert.equal(wrongBatch.status, 404);
     assert.equal(calls.update.length, 0);
 });
+
+test('growth uploads are removed after validation and ownership failures', async () => {
+    const directory = path.join(__dirname, '..', 'uploads', 'growth-progress');
+    const originalFiles = new Set(await fs.promises.readdir(directory));
+    for (const [url, values, status] of [
+        ['/1/growth-progress', { stage: 'FRUITING', notes: 'Notes', recordedAt: '2026-02-30' }, 400],
+        ['/1abc/growth-progress', { stage: 'FRUITING', notes: 'Notes' }, 400],
+        ['/1/growth-progress/2', { metadata: '{}' }, 400],
+        ['/99/growth-progress/2', {}, 404]
+    ]) {
+        const form = new FormData();
+        form.append('images', new Blob(['photo'], { type: 'image/png' }), 'cleanup.png');
+        for (const [key, value] of Object.entries(values)) form.append(key, value);
+        const result = await request(url, { method: url.includes('/2') ? 'PATCH' : 'POST', body: form });
+        assert.equal(result.status, status);
+        assert.equal(result.body.code, 'INVALID_REQUEST');
+        assert.deepEqual(new Set(await fs.promises.readdir(directory)), originalFiles);
+    }
+    assert.equal(calls.create.length, 0);
+    assert.equal(calls.update.length, 0);
+});
+
+test('growth uploads are removed on database errors and multer errors share JSON responses', async (t) => {
+    let imagePath;
+    t.mock.method(global.prisma.growthProgressRecord, 'create', async ({ data }) => {
+        imagePath = path.join(__dirname, '..', data.images.create[0].imageUrl.replace(/^\//, ''));
+        throw new Error('private database connection details');
+    });
+    t.mock.method(console, 'error', () => {});
+    const form = new FormData();
+    form.append('images', new Blob(['photo'], { type: 'image/png' }), 'failure.png');
+    form.append('stage', 'FRUITING');
+    form.append('notes', 'Notes');
+    const result = await request('/1/growth-progress', { method: 'POST', body: form });
+    assert.equal(result.status, 500);
+    assert.deepEqual(result.body, { code: 'INTERNAL_ERROR', message: 'Lỗi máy chủ' });
+    assert.equal(fs.existsSync(imagePath), false);
+
+    const invalidForm = new FormData();
+    invalidForm.append('images', new Blob(['text'], { type: 'text/plain' }), 'invalid.txt');
+    const invalidResult = await request('/1/growth-progress', { method: 'POST', body: invalidForm });
+    assert.equal(invalidResult.status, 400);
+    assert.equal(invalidResult.body.code, 'INVALID_REQUEST');
+
+    const directory = path.join(__dirname, '..', 'uploads', 'growth-progress');
+    const originalFiles = new Set(await fs.promises.readdir(directory));
+    const tooMany = new FormData();
+    for (let index = 0; index < 6; index++) tooMany.append('images', new Blob(['photo'], { type: 'image/png' }), `photo-${index}.png`);
+    const limitResult = await request('/1/growth-progress', { method: 'POST', body: tooMany });
+    assert.equal(limitResult.status, 400);
+    assert.equal(limitResult.body.code, 'INVALID_REQUEST');
+    assert.deepEqual(new Set(await fs.promises.readdir(directory)), originalFiles);
+});

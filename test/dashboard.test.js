@@ -39,6 +39,22 @@ const request = (path, token, options = {}) => fetch(`${baseUrl}${path}`, { ...o
 before(async () => { server = await new Promise((resolve) => { const instance = app.listen(0, '127.0.0.1', () => resolve(instance)); }); baseUrl = `http://127.0.0.1:${server.address().port}`; });
 after(async () => new Promise((resolve, reject) => server.close((error) => error ? reject(error) : resolve())));
 
+test('task validation uses shared helpers and preserves optional dates', async (t) => {
+    const managerToken = tokenFor(users[0]);
+    const create = t.mock.method(global.prisma.task, 'create');
+    for (const body of [[], { title: 'Task', metadata: {} }, { title: 'Task', dueAt: '2026-02-30' }, { title: 'Task', dueAt: '2026-10-01T08:00:00' }]) {
+        const response = await request('/api/dashboard/tasks', managerToken, { method: 'POST', body: JSON.stringify(body) });
+        assert.equal(response.status, 400);
+        assert.equal((await response.json()).code, 'INVALID_REQUEST');
+    }
+    assert.equal(create.mock.callCount(), 0);
+    for (const route of ['tasks', 'task-assignees']) {
+        const response = await request(`/api/dashboard/${route}?page=1abc`, managerToken);
+        assert.equal(response.status, 400);
+        assert.equal((await response.json()).code, 'INVALID_REQUEST');
+    }
+});
+
 test('auth me and dashboard task permissions follow the API contract', async () => {
     const managerToken = tokenFor(users[0]);
     const staffToken = tokenFor(users[1]);

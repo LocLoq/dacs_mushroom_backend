@@ -1,9 +1,7 @@
 const jwt = require('jsonwebtoken');
+const { fail, handle } = require('../services/apiHelpers');
 
-const invalidToken = (res) => res.status(401).json({
-    code: 'AUTH_INVALID_TOKEN',
-    message: 'Phiên đăng nhập đã hết hạn hoặc không hợp lệ'
-});
+const invalidToken = () => fail(401, 'Phiên đăng nhập đã hết hạn hoặc không hợp lệ', 'AUTH_INVALID_TOKEN');
 
 const getBearerToken = (req) => {
     const header = req.headers.authorization;
@@ -23,38 +21,33 @@ const resolveUser = async (token) => {
     return { id: user.id, username: user.username, role: user.role.name, tokenver: user.tokenver };
 };
 
-const authenticate = async (req, res, next, optional) => {
+const authenticate = (optional) => handle(async (req, res, next) => {
     const token = getBearerToken(req);
-    if (!token) return optional ? next() : invalidToken(res);
+    if (!token) return optional ? next() : invalidToken();
     try {
         const user = await resolveUser(token);
-        if (!user) return invalidToken(res);
+        if (!user) invalidToken();
         req.user = user;
         next();
     } catch (error) {
-        if (error.name === 'JsonWebTokenError' || error.name === 'TokenExpiredError') return invalidToken(res);
-        console.error(error);
-        return res.status(500).json({ message: 'Lỗi xác thực người dùng' });
+        if (['JsonWebTokenError', 'TokenExpiredError', 'NotBeforeError'].includes(error.name)) invalidToken();
+        throw error;
     }
-};
+});
 
 // Middleware xác thực JWT
-const authenticateToken = async (req, res, next) => {
-    return authenticate(req, res, next, false);
-};
+const authenticateToken = authenticate(false);
 
-const optionalAuthenticateToken = async (req, res, next) => {
-    return authenticate(req, res, next, true);
-};
+const optionalAuthenticateToken = authenticate(true);
 
 // Middleware kiểm tra quyền
 const authorizeRoles = (...allowedRoles) => {
-    return (req, res, next) => {
+    return handle((req, res, next) => {
         if (!req.user || !allowedRoles.includes(req.user.role)) {
-            return res.status(403).json({ code: 'AUTH_FORBIDDEN', message: 'Bạn không có quyền thực hiện hành động này' });
+            fail(403, 'Bạn không có quyền thực hiện hành động này', 'AUTH_FORBIDDEN');
         }
         next();
-    };
+    });
 };
 
 module.exports = {

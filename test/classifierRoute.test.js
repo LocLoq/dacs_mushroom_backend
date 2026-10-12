@@ -52,3 +52,32 @@ test('public classifier request creates a queued lookup and returns 202', async 
     assert.equal(queuedJobs[0].options.jobId, body.jobId);
     assert.match(queuedJobs[0].data.path, /uploads[\\/]classifier[\\/]/);
 });
+
+test('classifier validation and upload errors return shared 400 errors without creating lookups', async () => {
+    const initialCreates = creates.length;
+    let response = await fetch(`${baseUrl}/api/mushroom-classifier/classify`, { method: 'POST', body: new FormData() });
+    assert.equal(response.status, 400);
+    assert.equal((await response.json()).code, 'INVALID_REQUEST');
+    const form = new FormData();
+    form.append('image', new Blob(['text'], { type: 'text/plain' }), 'invalid.txt');
+    response = await fetch(`${baseUrl}/api/mushroom-classifier/classify`, { method: 'POST', body: form });
+    assert.equal(response.status, 400);
+    assert.equal((await response.json()).code, 'INVALID_REQUEST');
+    assert.equal(creates.length, initialCreates);
+});
+
+test('classifier queue failures record FAILED, clean the image and retain status 503', async (t) => {
+    let attemptedFile;
+    let failedLookup;
+    t.mock.method(console, 'error', () => {});
+    t.mock.method(queue, 'add', async (data) => { attemptedFile = data.path; throw new Error('private Redis connection details'); });
+    t.mock.method(global.prisma.classifierLookup, 'update', async (args) => { failedLookup = args; return {}; });
+    const form = new FormData();
+    form.append('image', new Blob(['photo'], { type: 'image/png' }), 'queue-failure.png');
+    const response = await fetch(`${baseUrl}/api/mushroom-classifier/classify`, { method: 'POST', body: form });
+    assert.equal(response.status, 503);
+    assert.deepEqual(await response.json(), { code: 'INTERNAL_ERROR', message: 'Không thể tiếp nhận yêu cầu phân loại' });
+    assert.equal(failedLookup.data.status, 'FAILED');
+    assert.ok(failedLookup.data.completedAt instanceof Date);
+    assert.equal(fs.existsSync(attemptedFile), false);
+});

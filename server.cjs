@@ -63,6 +63,7 @@ app.use('/api/public', require('./routes/publicGrowth'));
 // Swagger UI
 const swaggerDocument = YAML.load(path.join(__dirname, 'swagger.yaml'));
 app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(swaggerDocument));
+app.use(require('./services/apiHelpers').errorHandler);
 
 // basic socket event
 io.on('connection', (socket) => {

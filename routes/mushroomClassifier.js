@@ -1,3 +1,4 @@
+const { fail, pagination, pageResponse, fields, textField, dateField, handle, errorHandler } = require('../services/apiHelpers');
 const crypto = require('crypto');
 const express = require('express');
 const fs = require('fs');
@@ -53,17 +54,6 @@ const upload = multer({
     }
 });
 
-const parsePositiveInteger = (value) => {
-    const parsed = Number(value);
-    return Number.isInteger(parsed) && parsed > 0 ? parsed : null;
-};
-
-const parseDate = (value) => {
-    if (!value) return undefined;
-    const date = new Date(value);
-    return Number.isNaN(date.getTime()) ? null : date;
-};
-
 const historySelect = {
     id: true, originalName: true, mimeType: true, fileSize: true, status: true,
     predictedName: true, edibility: true, confidence: true, errorMessage: true,
@@ -75,9 +65,11 @@ router.post('/classify', auditAction('CLASSIFIER_SUBMIT', {
     entityType: 'ClassifierLookup',
     entityId: (req, res) => res.locals.classifierLookupId || null,
     metadata: (req) => ({ hasImage: Boolean(req.file) })
-}), optionalAuthenticateToken, upload.single('image'), async (req, res) => {
+}), optionalAuthenticateToken, upload.single('image'), handle(async (req, res) => {
+    let accepted = false;
     try {
-        if (!req.file) return res.status(400).json({ message: 'Vui lòng đính kèm ảnh nấm' });
+        if (!req.file) fail(400, 'Vui lòng đính kèm ảnh nấm');
+        fields(req.body || {}, [], { allowEmpty: true });
 
         const lookup = await prisma.classifierLookup.create({
             data: { userId: req.user?.id || null, originalName: req.file.originalname, mimeType: req.file.mimetype, fileSize: req.file.size }
@@ -95,56 +87,49 @@ router.post('/classify', auditAction('CLASSIFIER_SUBMIT', {
             throw queueError;
         }
 
+        accepted = true;
+        res.locals.classifierQueued = true;
         res.status(202).json({ jobId: lookup.id, status: lookup.status });
     } catch (error) {
+        if (!accepted) await removeFile(req.file?.path);
+        if (error.status || accepted) throw error;
         console.error('Error in classifier route:', error);
-        await removeFile(req.file?.path);
-        res.status(503).json({ message: 'Không thể tiếp nhận yêu cầu phân loại' });
+        fail(503, 'Không thể tiếp nhận yêu cầu phân loại');
     }
-});
+}));
 
-router.get('/history', auditAction('CLASSIFIER_HISTORY_VIEW', { entityType: 'ClassifierLookup' }), authenticateToken, authorizeRoles(...global.privilegedRoles), async (req, res) => {
-    try {
-        const page = parsePositiveInteger(req.query.page) || 1;
-        const limit = Math.min(parsePositiveInteger(req.query.limit) || 20, 100);
-        const from = parseDate(req.query.from);
-        const to = parseDate(req.query.to);
-        if (from === null || to === null || (from && to && from > to) || (req.query.status && !lookupStatuses.has(req.query.status))) {
-            return res.status(400).json({ message: 'Bộ lọc lịch sử không hợp lệ' });
-        }
-
-        const where = {
-            ...(req.query.status && { status: req.query.status }),
-            ...(req.query.predictedName && { predictedName: { contains: req.query.predictedName } }),
-            ...((from || to) && { createdAt: { ...(from && { gte: from }), ...(to && { lte: to }) } })
-        };
-        const [totalItems, data] = await Promise.all([
-            prisma.classifierLookup.count({ where }),
-            prisma.classifierLookup.findMany({ where, select: historySelect, skip: (page - 1) * limit, take: limit, orderBy: { createdAt: 'desc' } })
-        ]);
-
-        res.json({ data, pagination: { totalItems, currentPage: page, totalPages: Math.ceil(totalItems / limit), pageSize: limit } });
-    } catch (error) {
-        console.error(error);
-        res.status(500).json({ message: 'Lỗi máy chủ' });
+router.get('/history', auditAction('CLASSIFIER_HISTORY_VIEW', { entityType: 'ClassifierLookup' }), authenticateToken, authorizeRoles(...global.privilegedRoles), handle(async (req, res) => {
+    const paging = pagination(req.query, 100, 20);
+    const { limit, skip } = paging;
+    const from = req.query.from === undefined ? undefined : dateField(req.query.from, 'from');
+    const to = req.query.to === undefined ? undefined : dateField(req.query.to, 'to');
+    if ((from && to && from > to) || (req.query.status !== undefined && !lookupStatuses.has(req.query.status))) {
+        fail(400, 'Bộ lọc lịch sử không hợp lệ');
     }
-});
 
-router.get('/history/:id', auditAction('CLASSIFIER_HISTORY_DETAIL_VIEW', { entityType: 'ClassifierLookup', entityId: (req) => req.params.id }), authenticateToken, authorizeRoles(...global.privilegedRoles), async (req, res) => {
-    try {
-        const lookup = await prisma.classifierLookup.findUnique({ where: { id: req.params.id }, select: { ...historySelect, result: true } });
-        if (!lookup) return res.status(404).json({ message: 'Không tìm thấy lượt tra cứu' });
-        res.json({ data: lookup });
-    } catch (error) {
-        console.error(error);
-        res.status(500).json({ message: 'Lỗi máy chủ' });
-    }
-});
+    const where = {
+        ...(req.query.status && { status: req.query.status }),
+        ...(req.query.predictedName && { predictedName: { contains: textField(req.query.predictedName, 'predictedName', Infinity) } }),
+        ...((from || to) && { createdAt: { ...(from && { gte: from }), ...(to && { lte: to }) } })
+    };
+    const [totalItems, data] = await Promise.all([
+        prisma.classifierLookup.count({ where }),
+        prisma.classifierLookup.findMany({ where, select: historySelect, skip, take: limit, orderBy: { createdAt: 'desc' } })
+    ]);
+
+    res.json(pageResponse(data, totalItems, paging));
+}));
+
+router.get('/history/:id', auditAction('CLASSIFIER_HISTORY_DETAIL_VIEW', { entityType: 'ClassifierLookup', entityId: (req) => req.params.id }), authenticateToken, authorizeRoles(...global.privilegedRoles), handle(async (req, res) => {
+    const lookup = await prisma.classifierLookup.findUnique({ where: { id: req.params.id }, select: { ...historySelect, result: true } });
+    if (!lookup) fail(404, 'Không tìm thấy lượt tra cứu');
+    res.json({ data: lookup });
+}));
 
 router.use(async (error, req, res, next) => {
-    await removeFile(req.file?.path);
-    if (error instanceof multer.MulterError) return res.status(400).json({ message: error.code === 'LIMIT_FILE_SIZE' ? 'Ảnh không được vượt quá 5 MB' : 'Chỉ được đính kèm một ảnh' });
-    if (error.message === 'Chỉ hỗ trợ ảnh JPEG, PNG hoặc WebP') return res.status(400).json({ message: error.message });
+    if (!res.locals.classifierQueued) await removeFile(req.file?.path);
+    if (error instanceof multer.MulterError) return errorHandler({ status: 400, message: error.code === 'LIMIT_FILE_SIZE' ? 'Ảnh không được vượt quá 5 MB' : 'Chỉ được đính kèm một ảnh' }, req, res, next);
+    if (error.message === 'Chỉ hỗ trợ ảnh JPEG, PNG hoặc WebP') return errorHandler({ status: 400, message: error.message }, req, res, next);
     next(error);
 });
 

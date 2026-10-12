@@ -665,7 +665,7 @@ GET/POST     /cultivation-batches/{id}/images
 PATCH/DELETE /cultivation-batches/{id}/images/{imageId}
 ```
 
-Mọi role xem gallery. Chỉ manager/admin thấy nút tải ảnh, sửa chú thích, chọn bìa và xóa. GET phân trang với `page`, `limit` tối đa 50; thứ tự ảnh bìa trước, sau đó thời gian tải/ID tăng dần. DTO ảnh: `id`, khóa đối tượng tương ứng, `imageUrl`, `originalName`, `mimeType`, `fileSize`, `caption: String?`, `isCover: bool`, `uploadedByUserId: int?`, `createdAt`.
+GET gallery xác thực tùy chọn. Khách chỉ thấy ảnh isPublic=true với id, imageUrl, caption, isCover. Token hợp lệ xem mọi ảnh và đầy đủ metadata, gồm isPublic, originalName, uploadedByUserId, createdAt. Chỉ manager/admin có quyền mutation. Phân trang chỉ tính ảnh người gọi được xem, tối đa 50 ảnh/trang; ảnh bìa trước rồi createdAt/id tăng dần.
 
 Upload bằng Dio, `resource` là một trong ba tên resource trên:
 
@@ -695,3 +695,13 @@ Chọn bìa bằng PATCH `{ 'isCover': true }`; sửa chú thích bằng PATCH `
 - DTO tiền nhận chuỗi, lợi nhuận âm và chỉ số null; summary cập nhật sau sửa/xóa khoản chi/lần bán.
 - Report theo kỳ không cộng trang hiện tại để làm tổng; tải file financial dạng bytes.
 - Upload và quản lý bìa ở cả ba gallery; kiểm tra lỗi vượt giới hạn và URL ảnh tương đối.
+
+## Danh mục công khai, quyền ảnh và QR
+
+Từ điển và chi tiết nấm công khai không gửi Authorization, kể cả khi đang có token. DTO danh mục giữ ID, ưu tiên coverImageUrl rồi imageUrl và ảnh đóng gói sẵn; URL ảnh ghép theo origin backend.
+
+Upload gallery có công tắc Công khai: mặc định bật cho giống nấm, tắt cho cơ sở/lô. POST multipart gửi isPublic dạng chuỗi true/false; PATCH gửi JSON boolean. Gallery public xử lý được response thiếu metadata. URL ảnh riêng tư phải fetch bằng token đúng origin rồi hiển thị bytes trên Web; không chuyển token qua redirect, bỏ ảnh khi đăng xuất/đổi server.
+
+Chi tiết lô có QR chứa batchCode thuần và nút Lưu PNG. Tra cứu công khai quét mã rồi dùng API public theo mã. Quản lý/danh sách lô có Quét lô để cập nhật: GET /cultivation-batches/by-code/{batchCode} có token trả { data: { id, batchCode } }. Sau đó chọn Sinh trưởng/Chăm sóc/Thu hoạch và mở tab tương ứng; người dùng tự lưu bằng form hiện có. Encode mã thành một URL path segment đúng một lần.
+
+Quét camera hỗ trợ Android/iOS/Web; desktop nhập thủ công. Web cần HTTPS hoặc localhost và quyền camera. Dừng camera khi rời màn, chống nhận kết quả lặp; hủy/từ chối quyền/lỗi camera vẫn nhập mã được.

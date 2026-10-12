@@ -38,7 +38,7 @@ const createGalleryRouter = (parentModel, imageModel, parentField) => {
         try {
             await new Promise((resolve, reject) => upload(req, res, (error) => error ? reject(error) : resolve()));
             if (!req.files?.length) fail(400, 'Cần tải lên ít nhất một ảnh');
-            if (Object.keys(req.body || {}).some((key) => !['caption', 'isPublic'].includes(key))) fail(400, 'Chỉ hỗ trợ trường caption, isPublic và images');
+            fields(req.body || {}, ['caption', 'isPublic'], { allowEmpty: true });
             const caption = req.body.caption === undefined ? null : textField(req.body.caption, 'caption', 500, true);
             if (req.body.isPublic !== undefined && !['true', 'false'].includes(req.body.isPublic)) fail(400, 'isPublic phải là true hoặc false');
             const isPublic = req.body.isPublic === 'true';

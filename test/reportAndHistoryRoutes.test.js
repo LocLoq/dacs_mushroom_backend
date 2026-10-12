@@ -26,3 +26,35 @@ test('health, classifier history and all report JSON endpoints have happy paths'
   response = await request(`/api/mushroom-classifier/history/${lookup.id}`); assert.equal(response.status, 200);
   for (const type of ['overview', 'cultivation', 'classifier', 'audit']) { response = await request(`/api/reports/${type}`); assert.equal(response.status, 200, type); }
 });
+
+test('reports and classifier history share strict filter and pagination validation', async (t) => {
+  const batchReads = t.mock.method(global.prisma.cultivationBatch, 'findMany');
+  const historyReads = t.mock.method(global.prisma.classifierLookup, 'findMany');
+  for (const route of ['/api/reports/cultivation', '/api/mushroom-classifier/history']) {
+    for (const query of ['page=1abc', 'limit=0', 'from=2026-02-30', 'from=2026-10-01T08:00:00', 'from=2026-10-02&to=2026-10-01']) {
+      const response = await request(`${route}?${query}`);
+      assert.equal(response.status, 400, `${route}?${query}`);
+      assert.equal((await response.json()).code, 'INVALID_REQUEST');
+    }
+  }
+  const tooLong = await request('/api/reports/cultivation?from=2020-01-01&to=2026-01-01');
+  assert.equal(tooLong.status, 400);
+  assert.equal(batchReads.mock.callCount(), 0);
+  assert.equal(historyReads.mock.callCount(), 0);
+});
+
+test('report date-only boundaries use Vietnam time and retain 20/100 paging', async (t) => {
+  const batchReads = t.mock.method(global.prisma.cultivationBatch, 'findMany');
+  let response = await request('/api/reports/cultivation?from=2026-09-01&to=2026-09-02');
+  assert.equal(response.status, 200);
+  assert.equal((await response.json()).pagination.pageSize, 20);
+  const where = batchReads.mock.calls[0].arguments[0].where;
+  assert.equal(where.startDate.gte.toISOString(), '2026-08-31T17:00:00.000Z');
+  assert.equal(where.startDate.lte.toISOString(), '2026-09-02T16:59:59.999Z');
+  response = await request('/api/reports/cultivation?from=2026-09-01&to=2026-09-02&page=2&limit=200');
+  assert.equal(response.status, 200);
+  assert.equal((await response.json()).pagination.pageSize, 100);
+  assert.equal(batchReads.mock.calls[1].arguments[0].skip, 100);
+  response = await request('/api/mushroom-classifier/history');
+  assert.equal((await response.json()).pagination.pageSize, 20);
+});

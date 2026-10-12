@@ -124,6 +124,18 @@ test('SQL upgrade matches Prisma schema and preserves existing records', { skip:
     assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
 });
 
+test('QR batch lookup resolves exact codes for staff and refuses guests', { skip: !enabled }, async () => {
+    const code = 'LO / Đà Lạt #01?%';
+    const record = await prisma.cultivationBatch.create({ data: { batchCode: code, facilityId: facility.id, mushroomId: species.id, startDate: new Date() } });
+    try {
+        const resolved = await request(`/cultivation-batches/by-code/${encodeURIComponent(` ${code} `)}`, staff);
+        assert.equal(resolved.status, 200);
+        assert.deepEqual(resolved.body, { data: { id: record.id, batchCode: code } });
+        assert.equal((await request(`/cultivation-batches/by-code/${encodeURIComponent(code)}`, null)).status, 401);
+        assert.equal((await request('/cultivation-batches/by-code/NOT-EXISTING', staff)).status, 404);
+    } finally { await prisma.cultivationBatch.delete({ where: { id: record.id } }); }
+});
+
 test('task rejection, resubmission, immutable snapshot and approval', { skip: !enabled }, async () => {
     const task = await createTask();
     const record = await createGrowth();
