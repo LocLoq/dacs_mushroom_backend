@@ -15,6 +15,8 @@ npm run start:stack
 
 Lệnh này generate Prisma Client, khởi động Python classifier, chờ `/health` sẵn sàng tối đa 60 giây rồi khởi động Node. MySQL/MariaDB và Redis cần chạy sẵn; script không tự bật hai dịch vụ đó.
 
+Python được tự restart khi tiến trình thoát ngoài dự kiến, tối đa 3 lần trong 5 phút. Backend giám sát job treo/mất, retry lỗi tạm thời và áp dụng rate limit. Trước khi chạy phiên bản này trên database đã có, chạy `npx prisma db push` rồi `npm run prisma:generate` để thêm `input_path` nullable. Xem [cấu hình và kiểm thử phục hồi classifier](CLASSIFIER_RESILIENCE.md).
+
 Mở Swagger tại **http://localhost:8080/api-docs**. Nhấn `Ctrl+C` trong terminal để dừng stack.
 
 **Giữ `SKIP_SEED=1` khi chạy hằng ngày.** Nếu không đặt giá trị này, `start:stack` sẽ chạy seed trước khi bật server, cập nhật tài khoản demo và tạo lại nhật ký, thu hoạch, tiến trình, lịch sử nhận diện và audit demo.
@@ -281,7 +283,7 @@ Thay thông tin đăng nhập nếu dùng tài khoản có sẵn hoặc mật kh
 | `http://localhost:8080` | Origin Socket.IO và ảnh `/uploads/...` |
 | `http://127.0.0.1:8001/health` | Kiểm tra Python nội bộ |
 
-Để kiểm tra classifier đầy đủ, upload ảnh JPEG/PNG/WebP thật qua Swagger hoặc Flutter. POST trả `202` và `jobId`; client Socket.IO gửi `subscribe_job(jobId)` để nhận `processing`, `finished` hoặc `failed`.
+Để kiểm tra classifier đầy đủ, upload ảnh JPEG/PNG/WebP thật qua Swagger hoặc Flutter. POST trả `202` và `jobId`; client Socket.IO gửi `subscribe_job(jobId)` để nhận `processing`, `retrying`, `finished` hoặc `failed`. Nhận `429` thì chờ theo `Retry-After`; nhận `503` thì dịch vụ chưa sẵn sàng.
 
 ## 7. Chạy Node và Python riêng
 

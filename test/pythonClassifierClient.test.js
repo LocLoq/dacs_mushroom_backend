@@ -34,3 +34,27 @@ test('python classifier client rejects malformed or failed service results', asy
         await fs.promises.unlink(imagePath);
     }
 });
+
+test('python client distinguishes transient HTTP/network errors from permanent errors', async () => {
+    const imagePath = path.join(os.tmpdir(), `classifier-client-${Date.now()}-retry.png`);
+    await fs.promises.writeFile(imagePath, 'image');
+    const args = { lookupId: 'request-1', imagePath, originalName: 'm.png', mimeType: 'image/png' };
+    try {
+        for (const [status, code, retryable] of [[429, 'HTTP_429', true], [500, 'INFERENCE_FAILED', true],
+            [500, 'MODEL_INVALID', false], [422, 'IMAGE_INVALID', false], [401, 'HTTP_401', false]]) {
+            axios.post = async () => ({ status, data: { error: { code } } });
+            await assert.rejects(classifyWithPythonService(args), (error) => error.code === code && error.retryable === retryable);
+        }
+        for (const [code, expected, retryable] of [['ECONNRESET', 'SERVICE_UNAVAILABLE', true], ['ECONNABORTED', 'SERVICE_TIMEOUT', true], ['ERR_CANCELED', 'CLASSIFIER_CANCELED', false]]) {
+            axios.post = async () => { throw Object.assign(new Error('error'), { code }); };
+            await assert.rejects(classifyWithPythonService(args), (error) => error.code === expected && error.retryable === retryable);
+        }
+        axios.post = async () => ({ status: 200, data: { requestId: 'wrong', result: {} } });
+        await assert.rejects(classifyWithPythonService(args), (error) => error.code === 'INVALID_SERVICE_RESPONSE' && !error.retryable);
+        const controller = new AbortController();
+        controller.abort(Object.assign(new Error('stopping'), { code: 'WORKER_SHUTDOWN' }));
+        axios.post = async () => { throw Object.assign(new Error('canceled'), { code: 'ERR_CANCELED' }); };
+        await assert.rejects(classifyWithPythonService({ ...args, signal: controller.signal }), { code: 'WORKER_SHUTDOWN', retryable: true });
+    } finally { await fs.promises.unlink(imagePath); }
+    await assert.rejects(classifyWithPythonService(args), { code: 'INPUT_FILE_UNAVAILABLE', retryable: false });
+});

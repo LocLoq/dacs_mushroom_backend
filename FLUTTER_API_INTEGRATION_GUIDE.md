@@ -463,6 +463,11 @@ socket.on('processing', (data) {
   // status QUEUED hoặc PROCESSING
 });
 
+socket.on('retrying', (data) {
+  // status=QUEUED; hiển thị đang chờ thử lại, không upload ảnh lần nữa.
+  // retryDelayMs cho biết thời gian chờ, attempt/maxAttempts cho biết lượt thử.
+});
+
 socket.on('finished', (data) {
   // status SUCCEEDED và data['result']
 });

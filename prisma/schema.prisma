@@ -476,6 +476,7 @@ model ClassifierLookup {
   originalName  String                 @map("original_name") @db.VarChar(255)
   mimeType      String                 @map("mime_type") @db.VarChar(100)
   fileSize      Int                    @map("file_size")
+  inputPath     String?                @map("input_path") @db.VarChar(1024)
   status        ClassifierLookupStatus @default(QUEUED)
   result        Json?
   predictedName String?                @map("predicted_name") @db.VarChar(191)

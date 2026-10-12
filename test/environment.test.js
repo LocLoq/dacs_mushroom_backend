@@ -4,6 +4,7 @@ const { mkdtempSync, writeFileSync, unlinkSync, rmdirSync } = require('node:fs')
 const { tmpdir } = require('node:os');
 const path = require('node:path');
 const { loadEnvironment, getDatabaseUrl } = require('../config/environment.cjs');
+const { classifierConfig, retryDelay } = require('../config/classifier.cjs');
 
 test('injected environment works without a local env file', () => {
     const directory = mkdtempSync(path.join(tmpdir(), 'mushroom-env-'));
@@ -42,4 +43,17 @@ test('Prisma URL preserves explicit configuration and encodes database credentia
     assert.equal(url.hash, '');
     assert.equal(getDatabaseUrl({ DATABASE_HOST: '::1', DATABASE_USER: 'app', DATABASE_NAME: 'db' }),
         'mysql://app:@[::1]:3306/db');
+});
+
+test('classifier configuration validates overrides and preserves retry and watchdog defaults', () => {
+    const config = classifierConfig({});
+    assert.equal(config.attempts, 3);
+    assert.equal(config.queueWaitMs, 300000);
+    assert.equal(config.processingTimeoutMs, 150000);
+    assert.deepEqual([1, 2].map((attempt) => retryDelay(attempt, config.backoffMs)), [30000, 60000]);
+    assert.equal(classifierConfig({ CLASSIFIER_TIMEOUT_MS: '200000' }).processingTimeoutMs, 230000);
+    assert.equal(classifierConfig({ CLASSIFIER_JOB_ATTEMPTS: '5' }).attempts, 5);
+    for (const value of ['0', '-1', 'abc', '1.5', '']) {
+        assert.throws(() => classifierConfig({ CLASSIFIER_JOB_ATTEMPTS: value }));
+    }
 });

@@ -12,6 +12,7 @@ const { auditMiddleware } = require('./middlewares/audit');
 const { galleryMediaAccess } = require('./middlewares/galleryMedia');
 
 loadEnvironment();
+const { getRateLimiters, configureTrustProxy } = require('./middlewares/rateLimit');
 
 const adapter = new PrismaMariaDb({
   host: process.env.DATABASE_HOST,
@@ -24,10 +25,12 @@ const adapter = new PrismaMariaDb({
 const prisma = new PrismaClient({ adapter });
 
 const app = express();
+configureTrustProxy(app);
 const port = process.env.PORT || 8080;
 const corsOrigins = (process.env.CORS_ALLOWED_ORIGINS || '').split(',').map((item) => item.trim()).filter(Boolean);
 const corsOrigin = corsOrigins.length ? corsOrigins : '*';
-const corsOptions = { origin: corsOrigin, allowedHeaders: ['Authorization', 'Content-Type'], exposedHeaders: ['Content-Disposition'] };
+const corsOptions = { origin: corsOrigin, allowedHeaders: ['Authorization', 'Content-Type'],
+  exposedHeaders: ['Content-Disposition', 'RateLimit', 'RateLimit-Policy', 'Retry-After'] };
 
 const server = http.createServer(app);
 const io = new Server(server, {
@@ -43,10 +46,10 @@ global.allRoles = allRoles;
 global.privilegedRoles = privilegedRoles;
 
 app.use(cors(corsOptions));
+app.use('/api', auditMiddleware, getRateLimiters().api);
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 app.use('/uploads', galleryMediaAccess, express.static(path.join(__dirname, 'uploads')));
-app.use('/api', auditMiddleware);
 
 // api
 app.use('/api', require('./routes/test'));
@@ -64,6 +67,15 @@ app.use('/api/public', require('./routes/publicGrowth'));
 const swaggerDocument = YAML.load(path.join(__dirname, 'swagger.yaml'));
 app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(swaggerDocument));
 app.use(require('./services/apiHelpers').errorHandler);
+
+const classifierQueue = require('./queues/mushroomClassifierQueue');
+const { createClassifierMonitor, cleanStaleClassifierFiles } = require('./services/classifierMonitor');
+const { activeRequests } = require('./services/classifierLifecycle');
+const { withDeadline } = require('./services/classifierHealth');
+const classifierWorker = classifierQueue.startWorker();
+const classifierMonitor = createClassifierMonitor({ prisma, queue: classifierQueue });
+classifierMonitor.start(classifierWorker);
+void cleanStaleClassifierFiles(prisma);
 
 // basic socket event
 io.on('connection', (socket) => {
@@ -98,3 +110,20 @@ io.on('connection', (socket) => {
 server.listen(port, () => {
   console.log(`Server listening at http://localhost:${port}`);
 });
+
+let shuttingDown = false;
+async function shutdown() {
+  if (shuttingDown) return;
+  shuttingDown = true;
+  for (const active of activeRequests.values()) active.controller.abort(Object.assign(new Error('Backend stopping'), { code: 'WORKER_SHUTDOWN' }));
+  try {
+    await withDeadline(async () => {
+      await classifierMonitor.stop(classifierWorker);
+      await Promise.all([classifierWorker.close(), classifierQueue.close(), new Promise((resolve) => io.close(resolve))]);
+      await prisma.$disconnect();
+    }, 10000, new Error('Backend shutdown timed out'));
+  } catch (error) { console.error(error.message); }
+  process.exit(0);
+}
+process.once('SIGINT', shutdown);
+process.once('SIGTERM', shutdown);

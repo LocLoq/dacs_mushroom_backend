@@ -21,11 +21,23 @@ const resolveUser = async (token) => {
     return { id: user.id, username: user.username, role: user.role.name, tokenver: user.tokenver };
 };
 
+const resolutions = new WeakMap();
+const resolveRequestUser = (req) => {
+    if (!resolutions.has(req)) {
+        const token = getBearerToken(req);
+        const resolution = token ? resolveUser(token) : Promise.resolve(null);
+        // A public route can use IP identity without changing its auth behavior.
+        resolution.catch(() => {});
+        resolutions.set(req, resolution);
+    }
+    return resolutions.get(req);
+};
+
 const authenticate = (optional) => handle(async (req, res, next) => {
     const token = getBearerToken(req);
     if (!token) return optional ? next() : invalidToken();
     try {
-        const user = await resolveUser(token);
+        const user = await resolveRequestUser(req);
         if (!user) invalidToken();
         req.user = user;
         next();
@@ -53,5 +65,6 @@ const authorizeRoles = (...allowedRoles) => {
 module.exports = {
     authenticateToken,
     optionalAuthenticateToken,
-    authorizeRoles
+    authorizeRoles,
+    resolveRequestUser
 };

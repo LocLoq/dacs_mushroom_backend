@@ -13,6 +13,9 @@ info:
     Body phải là object và chỉ chứa field được hỗ trợ; PATCH growth-progress
     cho phép body rỗng khi có ảnh. ID công việc, submission và classifier là chuỗi UUID.
     Xung đột Prisma P2002/P2003/P2025/P2034 mặc định trả 409 STATE_CONFLICT.
+    Rate limit mặc định 300 yêu cầu/phút cho /api, riêng nhận diện 10 yêu cầu/phút;
+    theo tài khoản đã xác thực hoặc IP khách. /api/test và OPTIONS được miễn.
+    Vượt hạn mức trả 429 RATE_LIMITED kèm Retry-After, RateLimit và RateLimit-Policy.
 servers:
   - url: /
     description: Máy chủ đang phục vụ Swagger (tự dùng host và cổng hiện tại)
@@ -1052,6 +1055,13 @@ paths:
   /api/mushroom-classifier/classify:
     post:
       summary: Tải ảnh nấm lên để AI phân loại
+      description: |
+        Giới hạn riêng 10 yêu cầu/phút, chặn trước upload. Kiểm tra Redis và Python
+        trước khi tiếp nhận; lỗi dependency hoặc enqueue trả 503. Job đã nhận
+        chạy tối đa 3 lần với thời gian chờ retry 30/60 giây. Lỗi ảnh, token,
+        model/cấu hình hoặc response không hợp lệ không được retry.
+        Socket.IO: subscribe_job(jobId), processing, retrying, finished, failed.
+        retrying gồm jobId, status=QUEUED, attempt, maxAttempts, retryDelayMs, message.
       tags: [Phân loại Nấm]
       security: []
       requestBody:
@@ -1068,6 +1078,26 @@ paths:
       responses:
         default:
           $ref: '#/components/responses/ApiError'
+        '429':
+          description: Vượt hạn mức nhận diện hoặc hạn mức API chung
+          headers:
+            Retry-After:
+              description: Số giây cần chờ trước khi gửi lại
+              schema: { type: integer }
+            RateLimit:
+              description: Hạn mức và số yêu cầu còn lại theo từng chính sách
+              schema: { type: string }
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example: { code: RATE_LIMITED, message: 'Bạn đã gửi quá nhiều yêu cầu, vui lòng thử lại sau' }
+        '503':
+          description: Redis hoặc Python không sẵn sàng; code QUEUE_UNAVAILABLE hoặc CLASSIFIER_UNAVAILABLE
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
         '202':
           description: Đã tiếp nhận yêu cầu phân loại
           content:

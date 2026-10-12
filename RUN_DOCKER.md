@@ -66,6 +66,8 @@ Lần build đầu tải Node/Python image và PyTorch CPU, có thể mất vài
 
 Compose tạo database riêng trong named volume. Dữ liệu MySQL/MariaDB đang chạy trực tiếp trên máy **không tự được nhập** vào database Docker. `db-init` tạo/cập nhật schema từ `prisma/schema.prisma`, bao gồm bảng công việc; không cần chạy thêm các SQL bổ sung cho database mới này. Không dùng `--accept-data-loss` hoặc `--force-reset`; thay đổi schema có nguy cơ mất dữ liệu sẽ khiến bước này dừng để xử lý thủ công.
 
+Phiên bản này thêm cột nullable `classifier_lookups.input_path`. Khi nâng cấp, bảo đảm `db-init` chạy schema mới trước khi API mới khởi động. API có rate limit 300 yêu cầu/phút, riêng classifier 10 yêu cầu/phút; các biến retry, timeout, monitor và proxy được truyền qua Compose như mẫu `.env.docker.example`. Python chết giữa job sẽ được Docker restart, còn Bull giữ ảnh và retry. Xem [hành vi phục hồi và cấu hình](CLASSIFIER_RESILIENCE.md).
+
 ## 3. Tạo dữ liệu demo khi cần
 
 Database mới có schema nhưng chưa có tài khoản. Để thử app trong môi trường phát triển, chạy seed chủ động một lần:

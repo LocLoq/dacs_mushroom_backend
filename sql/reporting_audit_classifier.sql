@@ -4,6 +4,7 @@ CREATE TABLE IF NOT EXISTS `classifier_lookups` (
     `original_name` VARCHAR(255) NOT NULL,
     `mime_type` VARCHAR(100) NOT NULL,
     `file_size` INT NOT NULL,
+    `input_path` VARCHAR(1024) NULL,
     `status` ENUM('QUEUED', 'PROCESSING', 'SUCCEEDED', 'FAILED') NOT NULL DEFAULT 'QUEUED',
     `result` JSON NULL,
     `predicted_name` VARCHAR(191) NULL,
