@@ -23,6 +23,7 @@ model User {
   email         String
   role_id       Int
   tokenver      Int
+  must_change_password Boolean @default(false)
 
   role              Role               @relation(fields: [role_id], references: [id], onDelete: Cascade)
   classifierLookups ClassifierLookup[]
@@ -523,4 +524,14 @@ model AuditLog {
   @@index([action, createdAt])
   @@index([entityType, entityId])
   @@map("audit_logs")
+}
+
+// Keep counters after deleting batches/facilities so issued numbers are never reused.
+model BatchCodeCounter {
+  facilityId Int @map("facility_id")
+  year Int
+  lastNumber Int @default(0) @map("last_number")
+
+  @@id([facilityId, year])
+  @@map("batch_code_counters")
 }

@@ -355,3 +355,22 @@ Test Python có kiểm tra nạp model thật trên CPU. Các kiểm thử route
 Flutter Android Emulator thường dùng `http://10.0.2.2:8080/api`; điện thoại thật dùng `http://<IP-LAN>:8080/api`. Client kết nối Node; classifier Python là dịch vụ nội bộ. Khi triển khai HTTPS, cấu hình API, ảnh và Socket.IO qua cùng reverse proxy HTTPS/WSS.
 
 Các hợp đồng API và ví dụ request nằm trong [NEW_API_DOCUMENTATION.md](NEW_API_DOCUMENTATION.md), [API_TEST_PARAMS.md](API_TEST_PARAMS.md) và [FLUTTER_API_INTEGRATION_GUIDE.md](FLUTTER_API_INTEGRATION_GUIDE.md).
+
+
+## Buộc đổi mật khẩu và mã lô tự động
+
+Database đang dùng schema trước tính năng này: dừng API, sao lưu database, chạy **một lần**:
+
+```powershell
+npx prisma db execute --file sql/account_password_batch_codes.sql --config prisma.config.ts
+npm run prisma:generate
+npx prisma migrate diff --from-config-datasource --to-schema prisma/schema.prisma --exit-code
+```
+
+Script thêm `users.must_change_password` mặc định false, bảng `batch_code_counters` và khởi tạo số lớn nhất từ mã cũ khớp định dạng `LO-CS12-2026-001`. Không đổi mật khẩu, mã lô hoặc dữ liệu hiện có. Không chạy script sau khi đã áp dụng schema mới bằng db push. Database mới tạo từ Prisma schema có cờ/bảng sẵn. Khởi động backend mới trước frontend mới; client cũ gửi mã thủ công khi POST sẽ nhận 400.
+
+Admin có thể gửi Boolean `must_change_password` khi POST/PUT users. Bỏ field khi PUT giữ cờ. Auth/me trả cờ; phiên bị yêu cầu đổi chỉ gọi được auth/me và POST auth/change-password với `current_password,new_password`; API nội bộ khác trả `403 PASSWORD_CHANGE_REQUIRED`. Endpoint kiểm tra mật khẩu hiện tại, lưu mật khẩu mới bcrypt, xóa cờ và tăng tokenver nguyên tử. Phản hồi `{message,token,data}`; client phải thay token đã lưu. Sai mật khẩu hiện tại trả 400 và không xóa phiên.
+
+POST cultivation-batches không nhận batchCode: server cấp `LO-CS{facilityId}-{year}-{number}`, year từ startDate theo giờ Việt Nam. Bộ đếm riêng theo cơ sở/năm; transaction cấp số và tạo lô, tối đa ba retry khi xung đột. Không dùng lại số đã cấp sau xóa; vượt 999 vẫn tăng. PUT không đổi mã, kể cả đổi cơ sở/ngày bắt đầu; gửi đúng mã hiện tại vẫn được chấp nhận. Mã lô cũ/QR tiếp tục hoạt động.
+
+Kiểm tra `npm test` và `npm run test:db`. Test database tạo schema cũ trong database cô lập, áp dụng migration, kiểm tra dữ liệu cũ/bộ đếm, tạo lô đồng thời và QR sau sửa. Không nâng cấp database ứng dụng.

@@ -50,7 +50,8 @@ before(async () => {
     assert.match(database, /^dacs_feature_test_[a-f0-9]{16}$/);
     await connection.query(`CREATE DATABASE \`${database}\` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci`);
     await connection.query(`USE \`${database}\``);
-    for (const filename of ['test/fixtures/pre_workflow_schema.sql', 'sql/workflow_finance_gallery.sql', 'sql/gallery_visibility.sql', 'sql/classifier_resilience.sql']) {
+    for (const filename of ['test/fixtures/pre_workflow_schema.sql', 'sql/workflow_finance_gallery.sql', 'sql/gallery_visibility.sql', 'sql/classifier_resilience.sql', 'sql/account_password_batch_codes.sql']) {
+        if (filename === 'sql/account_password_batch_codes.sql') await connection.query("INSERT INTO cultivation_batches (batch_code,facility_id,mushroom_id,start_date,updated_at) VALUES ('LO-CS12-2026-099',1,1,NOW(3),NOW(3))");
         const statements = fs.readFileSync(path.join(__dirname, '..', filename), 'utf8').split(';').map((statement) => statement.trim()).filter(Boolean);
         for (const statement of statements) await connection.query(statement);
         if (filename.includes('pre_workflow_schema')) {
@@ -84,6 +85,7 @@ before(async () => {
     secondBatch = await prisma.cultivationBatch.create({ data: { batchCode: 'TEST-002', facilityId: facility.id, mushroomId: species.id, startDate: new Date('2025-01-01') } });
     const app = express();
     app.use(express.json());
+    app.use('/api', require('../routes/login'));
     app.use('/uploads', require('../middlewares/galleryMedia').galleryMediaAccess, express.static(path.join(__dirname, '..', 'uploads')));
     app.use('/api/dashboard', require('../routes/dashboard'));
     app.use('/api/cultivation-batches', require('../routes/cultivationBatchManagement'));
@@ -339,4 +341,42 @@ test('batch deletion retains submitted evidence photos and removes unused galler
     assert.equal(fs.existsSync(path.join(__dirname, '..', galleryUrl.slice(1))), false);
     const detail = await request(`/dashboard/tasks/${task.id}`);
     assert.equal(detail.body.data.submissions[0].evidence[0].record.images[0].imageUrl, imageUrl);
+});
+
+test('new SQL defaults preserve accounts and seed counters from issued codes', { skip: !enabled }, async () => {
+  assert.equal((await prisma.user.findUnique({ where: { username: 'legacy' } })).must_change_password, false);
+  assert.equal((await prisma.batchCodeCounter.findUnique({ where: { facilityId_year: { facilityId: 12, year: 2026 } } })).lastNumber, 99);
+});
+test('concurrent automatic codes are unique, isolated, immutable and never reused', { skip: !enabled }, async () => {
+  const data = { facilityId: facility.id, mushroomId: species.id, startDate: '2030-12-31T17:00:00Z', status: 'PREPARATION' };
+  const created = await Promise.all(Array.from({ length: 12 }, () => request('/cultivation-batches', manager, data)));
+  for (const row of created) assert.equal(row.status, 201, JSON.stringify(row.body));
+  const codes = created.map(row => row.body.data.batchCode);
+  assert.equal(new Set(codes).size, 12);
+  assert.ok(codes.every(code => code.startsWith(`LO-CS${facility.id}-2031-`)));
+  const ids = created.map(row => row.body.data.id);
+  const last = created.find(row => row.body.data.batchCode.endsWith('-012')).body.data;
+  assert.equal((await request(`/cultivation-batches/${last.id}`, manager, undefined, 'DELETE')).status, 200);
+  const next = await request('/cultivation-batches', manager, data); assert.equal(next.body.data.batchCode, `LO-CS${facility.id}-2031-013`); ids.push(next.body.data.id);
+  const anotherYear = await request('/cultivation-batches', manager, { ...data, startDate: '2032-01-01' }); assert.equal(anotherYear.body.data.batchCode, `LO-CS${facility.id}-2032-001`); ids.push(anotherYear.body.data.id);
+  const anotherFacility = await request('/cultivation-batches', manager, { ...data, facilityId: 1 }); assert.equal(anotherFacility.body.data.batchCode, 'LO-CS1-2031-001'); ids.push(anotherFacility.body.data.id);
+  const moved = await request(`/cultivation-batches/${ids[0]}`, manager, { facilityId: 1, startDate: '2032-01-01' }, 'PUT'); assert.equal(moved.body.data.batchCode, codes[0]);
+  assert.equal((await request(`/cultivation-batches/by-code/${codes[0]}`, staff)).body.data.id, ids[0]);
+  assert.equal((await request('/cultivation-batches', staff, data)).status, 403);
+  await prisma.batchCodeCounter.upsert({ where: { facilityId_year: { facilityId: facility.id, year: 2033 } }, create: { facilityId: facility.id, year: 2033, lastNumber: 999 }, update: { lastNumber: 999 } });
+  const overflow = await request('/cultivation-batches', manager, { ...data, startDate: '2033-01-01' }); assert.equal(overflow.body.data.batchCode, `LO-CS${facility.id}-2033-1000`); ids.push(overflow.body.data.id);
+  for (const id of ids) await prisma.cultivationBatch.deleteMany({ where: { id } });
+});
+
+test('mandatory password change uses real database updates and revokes the old JWT', { skip: !enabled }, async () => {
+  const user = await prisma.user.create({ data: { username: 'password-integration', password_hash: 'temporary', full_name: 'Password test', email: '', phone_number: '', role_id: staff.role_id, tokenver: 0, must_change_password: true } });
+  const me = await request('/auth/me', user); assert.equal(me.body.data.must_change_password, true);
+  assert.equal((await request('/cultivation-batches', user)).body.code, 'PASSWORD_CHANGE_REQUIRED');
+  assert.equal((await request('/auth/change-password', user, { current_password: 'wrong', new_password: 'new-password' })).status, 400);
+  const changed = await request('/auth/change-password', user, { current_password: 'temporary', new_password: 'new-password' });
+  assert.equal(changed.status, 200); assert.equal(changed.body.data.must_change_password, false);
+  assert.equal((await request('/auth/me', user)).status, 401);
+  const fresh = await fetch(`${baseUrl}/auth/me`, { headers: { authorization: `Bearer ${changed.body.token}` } }); assert.equal(fresh.status, 200);
+  const stored = await prisma.user.findUnique({ where: { id: user.id } }); assert.equal(stored.tokenver, 1); assert.equal(await require('bcrypt').compare('new-password', stored.password_hash), true);
+  await prisma.user.delete({ where: { id: user.id } });
 });

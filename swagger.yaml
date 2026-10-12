@@ -26,6 +26,17 @@ components:
       scheme: bearer
       bearerFormat: JWT
   schemas:
+    AuthProfile:
+      type: object
+      required: [id, username, role, must_change_password]
+      properties:
+        id: { type: integer }
+        username: { type: string }
+        full_name: { type: string }
+        email: { type: string }
+        phone_number: { type: string }
+        role: { type: string, enum: [admin, manager, staff] }
+        must_change_password: { type: boolean, default: false }
     Pagination:
       type: "object"
       properties:
@@ -767,6 +778,8 @@ components:
           readOnly: true
         batchCode:
           type: string
+          readOnly: true
+          description: Server tự cấp LO-CS{facilityId}-{năm bắt đầu UTC+7}-{số}; giữ khi sửa
         facilityId:
           type: integer
         mushroomId:
@@ -1038,6 +1051,10 @@ paths:
                 username:
                   type: string
                   description: Tên đăng nhập
+                must_change_password:
+                  type: boolean
+                  default: false
+                  description: Buộc đổi mật khẩu trước khi dùng API nội bộ
                 password:
                   type: string
                   description: Mật khẩu
@@ -1350,6 +1367,9 @@ paths:
                 password:
                   type: string
                   description: Mật khẩu mới (bỏ trống nếu không muốn đổi)
+                must_change_password:
+                  type: boolean
+                  description: Bỏ field để giữ cờ hiện tại
                 full_name:
                   type: string
                   description: Họ và tên mới
@@ -1680,7 +1700,8 @@ paths:
               properties:
                 batchCode:
                   type: string
-                  description: Mã lô nuôi trồng (Độc nhất)
+                  readOnly: true
+                  description: Server cấp mã; POST có field này bị từ chối
                 facilityId:
                   type: integer
                   description: ID cơ sở sản xuất
@@ -2166,16 +2187,49 @@ paths:
       summary: Lấy người dùng và quyền hiện tại từ phiên đăng nhập
       tags: [Xác thực]
       responses:
-        default:
-          $ref: '#/components/responses/ApiError'
         '200':
           description: Thông tin người dùng hiện tại
-        '401':
-          description: Token không hợp lệ, trả code AUTH_INVALID_TOKEN
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/ErrorResponse'
+                type: object
+                properties:
+                  data: { $ref: '#/components/schemas/AuthProfile' }
+        '401':
+          description: Token không hợp lệ, trả code AUTH_INVALID_TOKEN
+
+  /api/auth/change-password:
+    post:
+      summary: Đổi mật khẩu của tài khoản đang đăng nhập
+      description: Cho phép phiên buộc đổi mật khẩu. API nội bộ khác trả 403 PASSWORD_CHANGE_REQUIRED. Kiểm tra mật khẩu hiện tại, mật khẩu mới không rỗng và khác mật khẩu cũ; thành công vô hiệu token cũ.
+      tags: [Xác thực]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [current_password, new_password]
+              properties:
+                current_password: { type: string, minLength: 1, writeOnly: true }
+                new_password: { type: string, minLength: 1, writeOnly: true }
+      responses:
+        '200':
+          description: Đổi thành công; lưu token mới trước khi gọi API tiếp theo
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [message, token, data]
+                properties:
+                  message: { type: string }
+                  token: { type: string }
+                  data: { $ref: '#/components/schemas/AuthProfile' }
+        '400': { description: Mật khẩu hiện tại sai hoặc mật khẩu mới không hợp lệ; giữ phiên }
+        '401': { description: Token không hợp lệ }
+        '409': { description: Tài khoản đã được cập nhật đồng thời; đăng nhập lại }
+
   /api/dashboard/tasks:
     get:
       summary: "Danh sách công việc; mặc định TODO, IN_PROGRESS, PENDING_REVIEW"

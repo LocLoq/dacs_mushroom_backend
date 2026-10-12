@@ -12,7 +12,7 @@ global.prisma = {
     cultivationCareLog: { findMany: async () => [{ id: 1, batchId: 1 }], create: async ({ data }) => ({ id: 2, ...data }) },
     harvestRecord: { findMany: async () => [{ id: 1, totalYieldKg: 10 }], create: async ({ data }) => ({ id: 2, ...data }) },
     growthProgressRecord: { findMany: async () => [], create: async ({ data }) => ({ id: 1, ...data }), findFirst: async () => null, update: async () => null },
-    $transaction: async (callback) => callback({ harvestRecord: { create: async ({ data }) => ({ id: 3, ...data }), aggregate: async () => ({ _sum: { totalYieldKg: 22.5 } }) }, cultivationBatch: { update: async () => batch, updateMany: async () => ({ count: 1 }) } })
+    $transaction: async (callback) => callback({ batchCodeCounter: { upsert: async () => ({ lastNumber: 1 }) }, harvestRecord: { create: async ({ data }) => ({ id: 3, ...data }), aggregate: async () => ({ _sum: { totalYieldKg: 22.5 } }) }, cultivationBatch: { create: async ({ data }) => ({ ...batch, ...data }), update: async () => batch, updateMany: async () => ({ count: 1 }) } })
 };
 const app = express(); app.use(express.json()); app.use('/api/cultivation-batches', require('../routes/cultivationBatchManagement'));
 let server; let baseUrl;
@@ -24,7 +24,7 @@ after(async () => new Promise((resolve, reject) => server.close((error) => error
 test('cultivation batch, care-log and harvest endpoints have happy paths', async () => {
     let response = await request('/'); assert.equal(response.status, 200);
     response = await request('/1'); assert.equal(response.status, 200);
-    response = await request('/', { method: 'POST', body: JSON.stringify({ batchCode: 'NEW-BATCH', facilityId: 1, mushroomId: 1, startDate: '2026-01-01' }) }); assert.equal(response.status, 201);
+    response = await request('/', { method: 'POST', body: JSON.stringify({ facilityId: 1, mushroomId: 1, startDate: '2026-01-01' }) }); assert.equal(response.status, 201);
     response = await request('/1/care-logs'); assert.equal(response.status, 200);
     response = await request('/1/care-logs', { method: 'POST', body: JSON.stringify({ actionType: 'WATERING', notes: 'Đủ ẩm' }) }); assert.equal(response.status, 201);
     response = await request('/1/harvests'); assert.equal(response.status, 200);
@@ -63,4 +63,9 @@ test('batch helpers reject invalid IDs, filters and body fields before writing',
     assert.equal(response.status, 400);
     assert.equal(create.mock.callCount(), 0);
     assert.equal(transaction.mock.callCount(), 0);
+});
+
+test('batch code is immutable: same code is accepted and changes are rejected', async () => {
+  assert.equal((await request('/1', { method: 'PUT', body: JSON.stringify({ batchCode: batch.batchCode, facilityId: 2, startDate: '2027-01-01' }) })).status, 200);
+  assert.equal((await request('/1', { method: 'PUT', body: JSON.stringify({ batchCode: 'changed' }) })).status, 400);
 });

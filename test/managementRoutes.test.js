@@ -85,6 +85,52 @@ test('management APIs reject invalid IDs, pagination and bodies before writing',
     for (const write of writes) assert.equal(write.mock.callCount(), 0);
 });
 
+test('audit log default and blank filters return all actions with pagination', async (t) => {
+    const count = t.mock.method(global.prisma.auditLog, 'count');
+    const findMany = t.mock.method(global.prisma.auditLog, 'findMany');
+    const filterNames = ['actorUserId', 'statusCode', 'action', 'entityType', 'entityId', 'outcome', 'from', 'to'];
+    for (const blank of ['', '   ']) {
+        const query = new URLSearchParams({ page: '2', limit: '20', ...Object.fromEntries(filterNames.map((name) => [name, blank])) });
+        const response = await request(`/api/admin/audit-logs?${query}`);
+        assert.equal(response.status, 200);
+        const body = await response.json();
+        assert.deepEqual(body.data, [{ id: 1, action: 'LOGIN', outcome: 'SUCCESS' }]);
+        assert.equal(body.pagination.currentPage, 2);
+        assert.equal(body.pagination.pageSize, 20);
+        assert.deepEqual(count.mock.calls.at(-1).arguments[0], { where: {} });
+        assert.deepEqual(findMany.mock.calls.at(-1).arguments[0], {
+            where: {}, skip: 20, take: 20, orderBy: { createdAt: 'desc' }
+        });
+    }
+});
+
+test('audit log applies supplied filters and rejects malformed filters before querying logs', async (t) => {
+    const count = t.mock.method(global.prisma.auditLog, 'count');
+    const findMany = t.mock.method(global.prisma.auditLog, 'findMany');
+    const query = new URLSearchParams({ actorUserId: '1', statusCode: '200', action: 'LOGIN', entityType: 'User', entityId: '1', outcome: 'SUCCESS', from: '2026-10-01', to: '2026-10-12' });
+    let response = await request(`/api/admin/audit-logs?${query}`);
+    assert.equal(response.status, 200);
+    const where = {
+        actorUserId: 1, statusCode: 200, action: 'LOGIN', entityType: 'User', entityId: '1', outcome: 'SUCCESS',
+        createdAt: { gte: new Date('2026-10-01'), lte: new Date('2026-10-12') }
+    };
+    assert.deepEqual(count.mock.calls[0].arguments[0], { where });
+    assert.deepEqual(findMany.mock.calls[0].arguments[0].where, where);
+    count.mock.resetCalls();
+    findMany.mock.resetCalls();
+    for (const invalidQuery of [
+        'actorUserId=abc', 'actorUserId=0', 'actorUserId=-1', 'actorUserId=1&actorUserId=2',
+        'statusCode=abc', 'statusCode=0', 'statusCode=200&statusCode=400',
+        'outcome=unknown', 'from=invalid', 'to=invalid', 'from=2026-10-12&to=2026-10-01'
+    ]) {
+        response = await request(`/api/admin/audit-logs?${invalidQuery}`);
+        assert.equal(response.status, 400, invalidQuery);
+        assert.equal((await response.json()).code, 'INVALID_REQUEST');
+    }
+    assert.equal(count.mock.callCount(), 0);
+    assert.equal(findMany.mock.callCount(), 0);
+});
+
 test('Prisma uniqueness conflicts share a 409 response and login preserves password spaces', async (t) => {
     t.mock.method(global.prisma.mushroom, 'create', async () => { throw Object.assign(new Error('private SQL details'), { code: 'P2002' }); });
     let response = await request('/api/mushroom-species', { method: 'POST', body: JSON.stringify({ scientificName: 'Existing' }) });

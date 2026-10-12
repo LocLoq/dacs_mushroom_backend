@@ -4,6 +4,7 @@ const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
 const multer = require('multer');
+const { createBatchWithCode } = require('../services/batchCode');
 const router = express.Router();
 
 const { authenticateToken, authorizeRoles } = require('../middlewares/auth');
@@ -146,10 +147,9 @@ router.post('/', authenticateToken, authorizeRoles(...global.privilegedRoles), h
     const batchData = req.body;
     validateBatchData(batchData);
 
-    const newBatch = await prisma.cultivationBatch.create({
-        data: batchData,
-        include: { facility: true, mushroom: true }
-    });
+    if (batchData.batchCode !== undefined) fail(400, 'Mã lô được cấp tự động');
+    for (const field of ['facilityId', 'mushroomId', 'startDate']) if (batchData[field] === undefined) fail(400, `${field} là bắt buộc`);
+    const newBatch = await createBatchWithCode(prisma, batchData);
 
     res.status(201).json({ message: 'Thêm lô nuôi trồng thành công', data: newBatch });
 }));
@@ -330,6 +330,12 @@ router.put('/:id', authenticateToken, authorizeRoles(...global.allRoles), handle
     const batchData = req.body;
     validateBatchData(batchData);
 
+    if (batchData.batchCode !== undefined) {
+        const existing = await prisma.cultivationBatch.findUnique({ where: { id }, select: { batchCode: true } });
+        if (!existing) fail(404, 'Không tìm thấy lô nuôi trồng');
+        if (batchData.batchCode !== existing.batchCode) fail(400, 'Không được thay đổi mã lô');
+        delete batchData.batchCode;
+    }
     const updatedBatch = await prisma.cultivationBatch.update({
         where: { id },
         data: batchData,

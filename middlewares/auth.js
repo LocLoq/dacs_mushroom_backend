@@ -18,7 +18,7 @@ const resolveUser = async (token) => {
         include: { role: { select: { name: true } } }
     });
     if (!user || user.username !== decoded.username || user.tokenver !== decoded.tokenver || !global.allRoles.includes(user.role?.name)) return null;
-    return { id: user.id, username: user.username, role: user.role.name, tokenver: user.tokenver };
+    return { id: user.id, username: user.username, role: user.role.name, tokenver: user.tokenver, must_change_password: user.must_change_password === true };
 };
 
 const resolutions = new WeakMap();
@@ -39,7 +39,16 @@ const authenticate = (optional) => handle(async (req, res, next) => {
     try {
         const user = await resolveRequestUser(req);
         if (!user) invalidToken();
+        // A public endpoint may serve private data when an authenticated user is present.
+        // Restricted sessions use the guest projection until they change their password.
+        if (optional && user.must_change_password) return next();
         req.user = user;
+        const authPath = req.originalUrl.split('?')[0];
+        const canChangePassword = (req.method === 'GET' && authPath === '/api/auth/me')
+            || (req.method === 'POST' && authPath === '/api/auth/change-password');
+        if (!optional && user.must_change_password && !canChangePassword) {
+            fail(403, 'Bạn cần đổi mật khẩu trước khi tiếp tục', 'PASSWORD_CHANGE_REQUIRED');
+        }
         next();
     } catch (error) {
         if (['JsonWebTokenError', 'TokenExpiredError', 'NotBeforeError'].includes(error.name)) invalidToken();

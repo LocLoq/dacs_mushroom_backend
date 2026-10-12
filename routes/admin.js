@@ -15,20 +15,25 @@ const managerAndAdmin = ['admin', 'manager'];
 router.get('/audit-logs', auditAction('AUDIT_LOG_VIEW', { entityType: 'AuditLog' }), authenticateToken, authorizeRoles(...managerAndAdmin), handle(async (req, res) => {
     const paging = pagination(req.query, 100, 20);
     const { limit, skip } = paging;
-    const actorUserId = req.query.actorUserId === undefined ? undefined : parseId(req.query.actorUserId);
-    const statusCode = req.query.statusCode === undefined ? undefined : parseId(req.query.statusCode);
-    const from = req.query.from === undefined ? undefined : dateField(req.query.from, 'from');
-    const to = req.query.to === undefined ? undefined : dateField(req.query.to, 'to');
-    if ((req.query.outcome !== undefined && !['SUCCESS', 'FAILURE'].includes(req.query.outcome)) || (from && to && from > to)) {
+    const filters = { ...req.query };
+    // The default filter form sends empty strings for unselected filters.
+    for (const name of ['actorUserId', 'statusCode', 'action', 'entityType', 'entityId', 'outcome', 'from', 'to']) {
+        if (typeof filters[name] === 'string' && !filters[name].trim()) delete filters[name];
+    }
+    const actorUserId = filters.actorUserId === undefined ? undefined : parseId(filters.actorUserId);
+    const statusCode = filters.statusCode === undefined ? undefined : parseId(filters.statusCode);
+    const from = filters.from === undefined ? undefined : dateField(filters.from, 'from');
+    const to = filters.to === undefined ? undefined : dateField(filters.to, 'to');
+    if ((filters.outcome !== undefined && !['SUCCESS', 'FAILURE'].includes(filters.outcome)) || (from && to && from > to)) {
         fail(400, 'Bộ lọc audit log không hợp lệ');
     }
 
     const where = {
         ...(actorUserId && { actorUserId }),
-        ...(req.query.action && { action: textField(req.query.action, 'action', Infinity) }),
-        ...(req.query.entityType && { entityType: textField(req.query.entityType, 'entityType', Infinity) }),
-        ...(req.query.entityId && { entityId: textField(req.query.entityId, 'entityId', Infinity) }),
-        ...(req.query.outcome && { outcome: req.query.outcome }),
+        ...(filters.action && { action: textField(filters.action, 'action', Infinity) }),
+        ...(filters.entityType && { entityType: textField(filters.entityType, 'entityType', Infinity) }),
+        ...(filters.entityId && { entityId: textField(filters.entityId, 'entityId', Infinity) }),
+        ...(filters.outcome && { outcome: filters.outcome }),
         ...(statusCode && { statusCode }),
         ...((from || to) && { createdAt: { ...(from && { gte: from }), ...(to && { lte: to }) } })
     };
@@ -65,6 +70,7 @@ router.get('/users', authenticateToken, authorizeRoles(...onlyAdmin), handle(asy
             email: true,
             role_id: true,
             tokenver: true,
+            must_change_password: true,
             role: {
                 select: {
                     name: true
@@ -85,8 +91,9 @@ router.get('/roles', authenticateToken, authorizeRoles(...onlyAdmin), handle(asy
 
 // 3. Tạo User mới
 router.post('/users', authenticateToken, authorizeRoles(...onlyAdmin), handle(async (req, res) => {
-    fields(req.body, ['username', 'password', 'full_name', 'role_id', 'phone_number', 'email']);
-    const { password } = req.body;
+    fields(req.body, ['username', 'password', 'full_name', 'role_id', 'phone_number', 'email', 'must_change_password']);
+    const { password, must_change_password = false } = req.body;
+    if (typeof must_change_password !== 'boolean') fail(400, 'must_change_password phải là Boolean');
     const username = textField(req.body.username, 'username', 50);
     const full_name = textField(req.body.full_name, 'full_name', Infinity);
     const phone_number = textField(req.body.phone_number, 'phone_number', Infinity);
@@ -109,9 +116,10 @@ router.post('/users', authenticateToken, authorizeRoles(...onlyAdmin), handle(as
             phone_number,
             email,
             role_id,
+            must_change_password,
             tokenver: 1
         },
-        select: { id: true, username: true, full_name: true, role_id: true }
+        select: { id: true, username: true, full_name: true, role_id: true, must_change_password: true }
     });
 
     res.status(201).json({ message: 'Tạo tài khoản thành công', data: newUser });
@@ -120,10 +128,14 @@ router.post('/users', authenticateToken, authorizeRoles(...onlyAdmin), handle(as
 // 4. Cập nhật User
 router.put('/users/:id', authenticateToken, authorizeRoles(...onlyAdmin), handle(async (req, res) => {
     const id = parseId(req.params.id);
-    fields(req.body, ['password', 'full_name', 'role_id', 'phone_number', 'email']);
+    fields(req.body, ['password', 'full_name', 'role_id', 'phone_number', 'email', 'must_change_password']);
     const { password, full_name, role_id, phone_number, email } = req.body;
 
     let updateData = {};
+    if (req.body.must_change_password !== undefined) {
+        if (typeof req.body.must_change_password !== 'boolean') fail(400, 'must_change_password phải là Boolean');
+        updateData.must_change_password = req.body.must_change_password;
+    }
     if (full_name !== undefined) updateData.full_name = textField(full_name, 'full_name', Infinity);
     if (phone_number !== undefined) updateData.phone_number = textField(phone_number, 'phone_number', Infinity);
     if (email !== undefined) updateData.email = textField(email, 'email', Infinity);
@@ -138,7 +150,7 @@ router.put('/users/:id', authenticateToken, authorizeRoles(...onlyAdmin), handle
     const updatedUser = await prisma.user.update({
         where: { id },
         data: updateData,
-        select: { id: true, username: true, full_name: true, phone_number: true, email: true, role_id: true }
+        select: { id: true, username: true, full_name: true, phone_number: true, email: true, role_id: true, must_change_password: true }
     });
 
     res.json({ message: 'Cập nhật tài khoản thành công', data: updatedUser });

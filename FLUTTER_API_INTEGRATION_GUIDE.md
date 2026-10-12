@@ -562,6 +562,8 @@ Ví dụ:
 GET /api/admin/audit-logs?page=1&limit=20&action=LOGIN&outcome=SUCCESS
 ```
 
+Các bộ lọc không được gửi, hoặc có giá trị rỗng/chỉ chứa khoảng trắng, đều được bỏ qua. Mặc định API trả mọi hành động với phân trang; `page` và `limit` vẫn phải là số nguyên dương nếu được gửi.
+
 Frontend chỉ đọc audit log; không xây chức năng sửa hoặc xóa.
 
 ## 14. Chiến lược state và pagination
@@ -710,3 +712,12 @@ Upload gallery có công tắc Công khai: mặc định bật cho giống nấm
 Chi tiết lô có QR chứa batchCode thuần và nút Lưu PNG. Tra cứu công khai quét mã rồi dùng API public theo mã. Quản lý/danh sách lô có Quét lô để cập nhật: GET /cultivation-batches/by-code/{batchCode} có token trả { data: { id, batchCode } }. Sau đó chọn Sinh trưởng/Chăm sóc/Thu hoạch và mở tab tương ứng; người dùng tự lưu bằng form hiện có. Encode mã thành một URL path segment đúng một lần.
 
 Quét camera hỗ trợ Android/iOS/Web; desktop nhập thủ công. Web cần HTTPS hoặc localhost và quyền camera. Dừng camera khi rời màn, chống nhận kết quả lặp; hủy/từ chối quyền/lỗi camera vẫn nhập mã được.
+
+
+## Account and automatic batch code contract
+
+- Admin user create/update accept `must_change_password: boolean`; omitted on update preserves the flag. User list and mutation responses include it. `/api/auth/me` returns it as well.
+- When true, authenticated internal calls return `403 PASSWORD_CHANGE_REQUIRED`; keep the session and display the mandatory password form. Login, auth/me and self-service password change remain available. Public requests without Bearer remain available.
+- `POST /api/auth/change-password` body `{current_password,new_password}` returns `{message,token,data}`. Preserve password whitespace. Wrong current password is 400; success clears the flag and replaces the JWT (old tokens are revoked).
+- Create batches without `batchCode`. Use the response code `LO-CS{facilityId}-{Vietnam start year}-{sequence}` for display and QR. Sequence is per facility/year, at least three digits and never reused after deletion. PUT keeps the code when moving facility or start date; omit batchCode, or send the exact existing value.
+- Update database with `sql/account_password_batch_codes.sql` and regenerate Prisma before starting the new backend/frontend.
