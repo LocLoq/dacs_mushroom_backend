@@ -11,7 +11,7 @@ function createPushProcessor({ prisma, senders, now = () => new Date(), config =
         const send = senders[device.provider]; if (!send) return;
         const registration = { id: device.id, userId: device.userId, registrationId: device.registrationId, active: true };
         try {
-            await send(device, { notificationId: delivery.notification.id, userId: String(device.userId), registrationId: device.registrationId, origin: config.apiUrl });
+            await send(device, { notificationId: delivery.notification.id, userId: String(device.userId), registrationId: device.registrationId, origin: device.serverOrigin || config.apiUrl });
             await prisma.pushDelivery.updateMany({ where: { id: delivery.id, cancelledAt: null, device: registration }, data: { sentAt: now(), lastError: null } });
         } catch (error) {
             if (error.kind === 'invalid') {

@@ -4,7 +4,6 @@ services:
     restart: unless-stopped
     environment:
       API_DOMAIN: ${API_DOMAIN:?Set API_DOMAIN}
-      NTFY_DOMAIN: ${NTFY_DOMAIN:?Set NTFY_DOMAIN}
     ports:
       - "80:80"
       - "443:443"
@@ -14,8 +13,6 @@ services:
       - caddy_config:/config
     depends_on:
       api:
-        condition: service_healthy
-      ntfy:
         condition: service_healthy
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://127.0.0.1:2019/config/"]

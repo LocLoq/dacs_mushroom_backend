@@ -7,7 +7,7 @@ async function notifyUsers(tx, { recipients, actorId, eventKey, type, title, tas
             where: { userId_eventKey: { userId, eventKey } }, update: {},
             create: { userId, eventKey, type, title, taskId, batchId }
         });
-        const devices = await tx.pushDevice.findMany({ where: { userId, active: true, provider: { in: ["unifiedpush", "apns"] } }, select: { id: true } });
+        const devices = await tx.pushDevice.findMany({ where: { userId, active: true, provider: "fcm" }, select: { id: true } });
         for (const device of devices) await tx.pushDelivery.upsert({
             where: { notificationId_deviceId: { notificationId: notification.id, deviceId: device.id } },
             update: {}, create: { notificationId: notification.id, deviceId: device.id }

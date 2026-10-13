@@ -18,3 +18,13 @@ secrets/
 *.p8
 test-results-push.txt
 db-results-push.txt
+
+# Private Firebase service account keys
+*firebase-admin*.json
+*service-account*.json
+
+test-results-firebase.txt
+db-results-firebase.txt
+
+test-results-address.txt
+db-results-address.txt

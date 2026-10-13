@@ -2,7 +2,7 @@ openapi: 3.0.0
 info:
   title: 'API Quản lý Nông Trại Nấm'
   version: 1.0.0
-  description: "Tài liệu API cho Hệ thống Quản lý Nuôi trồng Nấm.\nStaff chỉ xem công việc được giao và lô đồng thời thuộc cơ sở/được phân công.\nMặc định công việc staff là TODO/IN_PROGRESS. Socket.IO chỉ gửi refresh {resource,id?}.\nXem STAFF_WORKFLOW.md để tích hợp phân quyền, ảnh chăm sóc và UnifiedPush/APNs (PUSH_HOSTING.md).\nLỗi HTTP dùng JSON {code, message}; lỗi 500 không trả chi tiết nội bộ.\nID số và page/limit phải là số nguyên dương an toàn; dữ liệu sai trả 400.\nPhân trang mặc định page=1, limit=10, tối đa 50; audit log, lịch sử classifier\nvà báo cáo dùng limit=20, tối đa 100. Limit vượt mức được giới hạn về mức tối đa.\nNgày nhận YYYY-MM-DD hoặc ISO 8601 có múi giờ; ngày không tồn tại bị từ chối.\nBộ lọc ngày báo cáo dùng đầu/cuối ngày tại Việt Nam (UTC+07:00), tối đa 5 năm.\nBody phải là object và chỉ chứa field được hỗ trợ; PATCH growth-progress\ncho phép body rỗng khi có ảnh. ID công việc, submission và classifier là chuỗi UUID.\nXung đột Prisma P2002/P2003/P2025/P2034 mặc định trả 409 STATE_CONFLICT.\nRate limit mặc định 300 yêu cầu/phút cho /api, riêng nhận diện 10 yêu cầu/phút;\ntheo tài khoản đã xác thực hoặc IP khách. /api/test và OPTIONS được miễn.\nVượt hạn mức trả 429 RATE_LIMITED kèm Retry-After, RateLimit và RateLimit-Policy.\n"
+  description: "Tài liệu API cho Hệ thống Quản lý Nuôi trồng Nấm.\nStaff chỉ xem công việc được giao và lô đồng thời thuộc cơ sở/được phân công.\nMặc định công việc staff là TODO/IN_PROGRESS. Socket.IO chỉ gửi refresh {resource,id?}.\nXem STAFF_WORKFLOW.md để tích hợp phân quyền, ảnh chăm sóc và Firebase/FCM (PUSH_HOSTING.md).\nLỗi HTTP dùng JSON {code, message}; lỗi 500 không trả chi tiết nội bộ.\nID số và page/limit phải là số nguyên dương an toàn; dữ liệu sai trả 400.\nPhân trang mặc định page=1, limit=10, tối đa 50; audit log, lịch sử classifier\nvà báo cáo dùng limit=20, tối đa 100. Limit vượt mức được giới hạn về mức tối đa.\nNgày nhận YYYY-MM-DD hoặc ISO 8601 có múi giờ; ngày không tồn tại bị từ chối.\nBộ lọc ngày báo cáo dùng đầu/cuối ngày tại Việt Nam (UTC+07:00), tối đa 5 năm.\nBody phải là object và chỉ chứa field được hỗ trợ; PATCH growth-progress\ncho phép body rỗng khi có ảnh. ID công việc, submission và classifier là chuỗi UUID.\nXung đột Prisma P2002/P2003/P2025/P2034 mặc định trả 409 STATE_CONFLICT.\nRate limit mặc định 300 yêu cầu/phút cho /api, riêng nhận diện 10 yêu cầu/phút;\ntheo tài khoản đã xác thực hoặc IP khách. /api/test và OPTIONS được miễn.\nVượt hạn mức trả 429 RATE_LIMITED kèm Retry-After, RateLimit và RateLimit-Policy.\n"
 servers:
   -
     url: /
@@ -5246,6 +5246,9 @@ paths:
                       registrationId:
                         type: string
                         format: uuid
+                      serverOrigin:
+                        type: string
+                        nullable: true
         default:
           $ref: '#/components/responses/ApiError'
       requestBody:
@@ -5253,64 +5256,30 @@ paths:
         content:
           application/json:
             schema:
-              oneOf:
-                -
-                  type: object
-                  additionalProperties: false
-                  required:
-                    - platform
-                    - provider
-                    - token
-                    - keys
-                  properties:
-                    platform:
-                      type: string
-                      enum:
-                        - android
-                    provider:
-                      type: string
-                      enum:
-                        - unifiedpush
-                    token:
-                      type: string
-                      format: uri
-                      maxLength: 8192
-                    keys:
-                      type: object
-                      required:
-                        - p256dh
-                        - auth
-                      additionalProperties: false
-                      properties:
-                        p256dh:
-                          type: string
-                        auth:
-                          type: string
-                -
-                  type: object
-                  additionalProperties: false
-                  required:
-                    - platform
-                    - provider
-                    - token
-                    - apnsEnvironment
-                  properties:
-                    platform:
-                      type: string
-                      enum:
-                        - ios
-                    provider:
-                      type: string
-                      enum:
-                        - apns
-                    token:
-                      type: string
-                      pattern: '^[a-fA-F0-9]{64}$'
-                    apnsEnvironment:
-                      type: string
-                      enum:
-                        - sandbox
-                        - production
+              type: object
+              additionalProperties: false
+              required:
+                - token
+                - platform
+              properties:
+                platform:
+                  type: string
+                  enum:
+                    - android
+                    - ios
+                provider:
+                  type: string
+                  enum:
+                    - fcm
+                  default: fcm
+                token:
+                  type: string
+                  maxLength: 4096
+                serverOrigin:
+                  type: string
+                  format: uri
+                  maxLength: 512
+                  description: 'Origin backend được app chọn; lưu theo thiết bị để payload push không phụ thuộc IP trong API_PUBLIC_URL.'
     delete:
       summary: 'Hủy thiết bị push của tài khoản hiện tại'
       tags:
@@ -5386,10 +5355,11 @@ paths:
                       apiUrl:
                         type: string
                         nullable: true
-                      ntfyUrl:
+                      provider:
                         type: string
-                        nullable: true
-                      vapidPublicKey:
+                        enum:
+                          - fcm
+                      projectId:
                         type: string
                         nullable: true
                       version:
@@ -5397,7 +5367,6 @@ paths:
                       channels:
                         type: object
                         properties:
-                          unifiedpush: {type: boolean}
-                          apns: {type: boolean}
+                          fcm: {type: boolean}
         default:
           $ref: '#/components/responses/ApiError'

@@ -1,43 +1,10 @@
-services:
+﻿services:
   api:
     environment:
       PUSH_HOST_MODE: ${PUSH_HOST_MODE:-vps}
       API_PUBLIC_URL: ${API_PUBLIC_URL:-}
-      NTFY_PUBLIC_URL: ${NTFY_PUBLIC_URL:-}
       PUSH_ENABLED: ${PUSH_ENABLED:-false}
-      UNIFIEDPUSH_ENABLED: ${UNIFIEDPUSH_ENABLED:-false}
-      APNS_ENABLED: ${APNS_ENABLED:-false}
-      VAPID_SUBJECT: ${VAPID_SUBJECT:-}
-      VAPID_PUBLIC_KEY: ${VAPID_PUBLIC_KEY:-}
-      VAPID_PRIVATE_KEY: ${VAPID_PRIVATE_KEY:-}
-      APNS_KEY_FILE: ${APNS_KEY_FILE:-/run/push/AuthKey.p8}
-      APNS_KEY_ID: ${APNS_KEY_ID:-}
-      APNS_TEAM_ID: ${APNS_TEAM_ID:-}
-      APNS_TOPIC: ${APNS_TOPIC:-com.example.thu}
+      FIREBASE_PROJECT_ID: ${FIREBASE_PROJECT_ID:-}
+      GOOGLE_APPLICATION_CREDENTIALS: /run/firebase/firebase-admin.json
     volumes:
-      - ./secrets:/run/push:ro
-  ntfy:
-    image: binwiederhier/ntfy:v2.30.0
-    restart: unless-stopped
-    command: ["serve"]
-    environment:
-      NTFY_BASE_URL: ${NTFY_PUBLIC_URL:?Set NTFY_PUBLIC_URL}
-      NTFY_LISTEN_HTTP: ":80"
-      NTFY_CACHE_FILE: /var/cache/ntfy/cache.db
-      NTFY_AUTH_FILE: /var/lib/ntfy/auth.db
-      NTFY_AUTH_DEFAULT_ACCESS: deny-all
-      NTFY_ENABLE_LOGIN: "true"
-      NTFY_BEHIND_PROXY: ${PUSH_BEHIND_PROXY:-false}
-    ports:
-      - "${NTFY_BIND_ADDRESS:-127.0.0.1}:${NTFY_PORT:-8081}:80"
-    volumes:
-      - ntfy_cache:/var/cache/ntfy
-      - ntfy_auth:/var/lib/ntfy
-    healthcheck:
-      test: ["CMD", "wget", "-qO-", "http://127.0.0.1/v1/health"]
-      interval: 30s
-      timeout: 5s
-      retries: 3
-volumes:
-  ntfy_cache:
-  ntfy_auth:
+      - ${FIREBASE_CREDENTIALS_DIR:-./secrets}:/run/firebase:ro

@@ -48,13 +48,13 @@ Classifier ở namespace mặc định, giữ subscribe_job(UUID). Các event pr
 
 ## Push Android/iOS và ba chế độ host
 
-Xem [PUSH_HOSTING.md](PUSH_HOSTING.md) cho UnifiedPush/ntfy, APNs trực tiếp, VPS/LAN/VS Code tunnel, migration và đăng ký thiết bị.
+Xem [PUSH_HOSTING.md](PUSH_HOSTING.md) cho Firebase/FCM Android và iOS, VPS/LAN/VS Code tunnel, migration và đăng ký thiết bị.
 
 ## Kiểm thử
 
 npm test; npm run test:db (database tạm, không thay dữ liệu ứng dụng); npm run prisma:validate; flutter analyze --no-fatal-infos; flutter test.
 
-Để nghiệm thu push, cần thiết bị Android có ntfy UnifiedPush distributor và iOS có APNs hợp lệ: kiểm tra nhận foreground/background/terminated, mở đúng công việc, logout/đổi tài khoản và staff đã bị thu hồi quyền. Build/sign iOS cần macOS/Xcode.
+Để nghiệm thu push, cần thiết bị Android có Google Play Services và iOS có APNs hợp lệ: kiểm tra nhận foreground/background/terminated, mở đúng công việc, logout/đổi tài khoản và staff đã bị thu hồi quyền. Build/sign iOS cần macOS/Xcode.
 
 
 ### Flutter tests trên đường dẫn Windows hiện tại

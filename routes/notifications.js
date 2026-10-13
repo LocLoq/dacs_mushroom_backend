@@ -36,17 +36,17 @@ router.patch('/:id/read', handle(async (req, res) => {
     res.json({ message: 'Đã đọc thông báo' });
 }));
 router.put('/devices', handle(async (req, res) => {
-    fields(req.body, ['token', 'platform', 'provider', 'keys', 'apnsEnvironment']);
+    fields(req.body, ['token', 'platform', 'provider', 'serverOrigin']);
     let data;
     try { data = validateDevice(req.body); } catch (error) { fail(400, error.message); }
     const device = await prisma.$transaction(async (tx) => {
         const existing = await tx.pushDevice.findUnique({ where: { identityHash: data.identityHash } });
-        const unchanged = existing && existing.active && existing.userId === req.user.id && existing.p256dh === data.p256dh && existing.auth === data.auth;
+        const unchanged = existing && existing.active && existing.userId === req.user.id && existing.platform === data.platform && existing.serverOrigin === data.serverOrigin && existing.p256dh === data.p256dh && existing.auth === data.auth;
         const registrationId = unchanged ? existing.registrationId : randomUUID();
         if (existing && !unchanged) await tx.pushDelivery.updateMany({ where: { deviceId: existing.id, sentAt: null, cancelledAt: null }, data: { cancelledAt: new Date() } });
         return tx.pushDevice.upsert({ where: { identityHash: data.identityHash }, create: { ...data, userId: req.user.id, active: true, registrationId }, update: { ...data, userId: req.user.id, active: true, registrationId } });
     }, { isolationLevel: 'Serializable' });
-    res.json({ message: 'Đã đăng ký thiết bị', data: { registrationId: device.registrationId } });
+    res.json({ message: 'Đã đăng ký thiết bị', data: { registrationId: device.registrationId, serverOrigin: device.serverOrigin } });
 }));
 router.delete('/devices', handle(async (req, res) => {
     fields(req.body, ['token', 'provider', 'apnsEnvironment', 'registrationId']);

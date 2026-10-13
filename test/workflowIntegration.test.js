@@ -51,7 +51,7 @@ before(async () => {
     assert.match(database, /^dacs_feature_test_[a-f0-9]{16}$/);
     await connection.query(`CREATE DATABASE \`${database}\` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci`);
     await connection.query(`USE \`${database}\``);
-    for (const filename of ['test/fixtures/pre_workflow_schema.sql', 'sql/workflow_finance_gallery.sql', 'sql/gallery_visibility.sql', 'sql/classifier_resilience.sql', 'sql/account_password_batch_codes.sql', 'sql/staff_care_notifications.sql', 'sql/unifiedpush_apns.sql']) {
+    for (const filename of ['test/fixtures/pre_workflow_schema.sql', 'sql/workflow_finance_gallery.sql', 'sql/gallery_visibility.sql', 'sql/classifier_resilience.sql', 'sql/account_password_batch_codes.sql', 'sql/staff_care_notifications.sql', 'sql/unifiedpush_apns.sql', 'sql/firebase_push.sql', 'sql/push_device_origin.sql']) {
         if (filename === 'sql/account_password_batch_codes.sql') await connection.query("INSERT INTO cultivation_batches (batch_code,facility_id,mushroom_id,start_date,updated_at) VALUES ('LO-CS12-2026-099',1,1,NOW(3),NOW(3))");
         const statements = fs.readFileSync(path.join(__dirname, '..', filename), 'utf8').split(';').map((statement) => statement.trim()).filter(Boolean);
         for (const statement of statements) await connection.query(statement);
@@ -77,6 +77,16 @@ before(async () => {
             const history = await connection.query("SELECT id,sent_at,cancelled_at FROM push_deliveries WHERE device_id='legacy-device' ORDER BY id");
             assert.equal(history.length, 2); assert.ok(history[0].cancelled_at); assert.equal(history[0].sent_at, null);
             assert.equal(history[1].cancelled_at, null); assert.ok(history[1].sent_at);
+            await connection.query("INSERT INTO push_devices (id,user_id,token,platform,updated_at,identity_hash,provider,active,registration_id) VALUES ('retired-unified',1,'http://old.example/upTest','android',NOW(3),REPEAT('f',64),'unifiedpush',true,UUID())");
+            await connection.query("INSERT INTO push_deliveries (id,notification_id,device_id) VALUES ('retired-pending','legacy-notice','retired-unified')");
+            await connection.query("INSERT INTO push_deliveries (id,notification_id,device_id,sent_at) VALUES ('retired-sent','legacy-sent-notice','retired-unified',NOW(3))");
+        }
+        if (filename === 'sql/firebase_push.sql') {
+            const retired = await connection.query("SELECT active FROM push_devices WHERE id='retired-unified'");
+            assert.equal(retired[0].active,0);
+            const rows = await connection.query("SELECT id,sent_at,cancelled_at FROM push_deliveries WHERE device_id='retired-unified' ORDER BY id");
+            assert.equal(rows.length,2); assert.ok(rows[0].cancelled_at); assert.equal(rows[0].sent_at,null);
+            assert.equal(rows[1].cancelled_at,null); assert.ok(rows[1].sent_at);
         }
         if (filename === 'sql/workflow_finance_gallery.sql') {
             for (const [table, parentField] of [['facility_images', 'facility_id'], ['mushroom_images', 'mushroom_id'], ['batch_images', 'batch_id']]) {
@@ -474,7 +484,7 @@ test('staff scope, care photos, notification ownership and immediate revocation'
 
 test('push device rebinding cancels history and old unregister cannot remove the new session', { skip: !enabled }, async () => {
     const deviceToken = 'a'.repeat(64);
-    const body = { token: deviceToken, platform: 'ios', provider: 'apns', apnsEnvironment: 'sandbox' };
+    const body = { token: deviceToken, platform: 'ios', provider: 'fcm' };
     const first = await request('/notifications/devices', staff, body, 'PUT'); assert.equal(first.status, 200);
     const device = await prisma.pushDevice.findFirst({ where: { token: deviceToken } });
     const notice = await prisma.notification.create({ data: { userId: staff.id, eventKey: 'device-test', type: 'TASK_UPDATED', title: 'Device test' } });
@@ -488,35 +498,57 @@ test('push device rebinding cancels history and old unregister cannot remove the
     assert.equal((await prisma.pushDevice.findUnique({ where: { id: device.id } })).active, false);
     assert.equal(await prisma.pushDelivery.count({ where: { deviceId: device.id } }), 1);
     assert.equal((await request('/notifications/push-config', staff)).status, 200);
-    assert.equal((await request('/notifications/devices', staff, { token: 'old-fcm-token', platform: 'android' }, 'PUT')).status, 400);
+    assert.equal((await request('/notifications/devices', staff, { token: 'retired', platform: 'android', provider: 'unifiedpush' }, 'PUT')).status, 400);
 });
 
-test('multiple push environments stay independent; worker cancellation uses the real registration guard', { skip: !enabled }, async () => {
+test('multiple FCM devices stay independent; worker cancellation uses the real registration guard', { skip: !enabled }, async () => {
     const value = 'b'.repeat(64);
-    const body = { platform: 'ios', provider: 'apns', token: value, apnsEnvironment: 'sandbox' };
+    const body = { platform: 'android', provider: 'fcm', token: value };
+    const iosToken = 'c'.repeat(64);
     const one = await request('/notifications/devices', staff, body, 'PUT');
     assert.equal(one.status, 200);
     const same = await request('/notifications/devices', staff, body, 'PUT');
     assert.equal(same.body.data.registrationId, one.body.data.registrationId);
-    const production = await request('/notifications/devices', staff, { ...body, apnsEnvironment: 'production' }, 'PUT');
+    const production = await request('/notifications/devices', staff, { ...body, platform:'ios',token:iosToken }, 'PUT');
     assert.equal(production.status, 200);
-    const devices = await prisma.pushDevice.findMany({ where: { userId: staff.id, active: true, token: value } });
+    const devices = await prisma.pushDevice.findMany({ where: { userId: staff.id, active: true, token: {in:[value,iosToken]} } });
     assert.equal(devices.length, 2); assert.notEqual(devices[0].identityHash, devices[1].identityHash);
     const notices = await prisma.$transaction(tx => require('../services/notifications').notifyUsers(tx, { recipients: [staff.id], actorId: manager.id, eventKey: 'multi-device-notice', type: 'TASK_UPDATED', title: 'Generic' }));
     const deliveries = await prisma.pushDelivery.findMany({ where: { notificationId: notices[0].id, deviceId: { in: devices.map(d => d.id) } }, include: { device: true } });
     assert.equal(deliveries.length, 2);
-    const sandbox = deliveries.find(d => d.device.apnsEnvironment === 'sandbox');
-    const live = deliveries.find(d => d.device.apnsEnvironment === 'production');
+    const sandbox = deliveries.find(d => d.device.platform === 'android');
+    const live = deliveries.find(d => d.device.platform === 'ios');
     const { createPushProcessor } = require('../queues/notificationQueue');
-    await createPushProcessor({ prisma, senders: { apns: async () => {
+    await createPushProcessor({ prisma, senders: { fcm: async () => {
         const rebound = await request('/notifications/devices', other, body, 'PUT'); assert.equal(rebound.status, 200);
         throw { kind: 'invalid' };
     } } })({ data: { deliveryId: sandbox.id } });
     const rebound = await prisma.pushDevice.findUnique({ where: { id: sandbox.deviceId } });
     assert.equal(rebound.active, true); assert.equal(rebound.userId, other.id);
     let sends = 0;
-    const processor = createPushProcessor({ prisma, senders: { apns: async () => { sends++; } } });
+    const processor = createPushProcessor({ prisma, senders: { fcm: async () => { sends++; } } });
     await processor({ data: { deliveryId: live.id } }); await processor({ data: { deliveryId: live.id } });
     assert.equal(sends, 1); assert.ok((await prisma.pushDelivery.findUnique({ where: { id: live.id } })).sentAt);
     assert.equal((await prisma.pushDevice.findUnique({ where: { id: live.deviceId } })).active, true);
+});
+
+test('changing push server origin creates a new registration and cancels pending deliveries', {skip:!enabled}, async () => {
+    const body={platform:'android',provider:'fcm',token:'origin-test-token',serverOrigin:'https://first.example.test'};
+    const first=await request('/notifications/devices',staff,body,'PUT');assert.equal(first.status,200);
+    assert.equal(first.body.data.serverOrigin,body.serverOrigin);
+    const same=await request('/notifications/devices',staff,body,'PUT');assert.equal(same.body.data.registrationId,first.body.data.registrationId);
+    const device=await prisma.pushDevice.findFirst({where:{token:body.token}});
+    const notice=await prisma.notification.create({data:{userId:staff.id,eventKey:'origin-change-test',type:'LOCAL_TEST',title:'Test'}});
+    const delivery=await prisma.pushDelivery.create({data:{notificationId:notice.id,deviceId:device.id}});
+    const next=await request('/notifications/devices',staff,{...body,serverOrigin:'https://second.example.test'},'PUT');assert.equal(next.status,200);
+    assert.notEqual(next.body.data.registrationId,first.body.data.registrationId);
+    assert.ok((await prisma.pushDelivery.findUnique({where:{id:delivery.id}})).cancelledAt);
+    await request('/notifications/devices',staff,{token:body.token,registrationId:first.body.data.registrationId},'DELETE');
+    assert.equal((await prisma.pushDevice.findUnique({where:{id:device.id}})).active,true);
+    const current=await prisma.notification.create({data:{userId:staff.id,eventKey:'origin-send-test',type:'LOCAL_TEST',title:'Test'}});
+    const row=await prisma.pushDelivery.create({data:{notificationId:current.id,deviceId:device.id}});
+    let payload;
+    await require('../queues/notificationQueue').createPushProcessor({prisma,config:{apiUrl:'https://fallback.example.test'},senders:{fcm:async(d,p)=>payload=p}})({data:{deliveryId:row.id}});
+    assert.equal(payload.origin,'https://second.example.test');
+    assert.equal((await request('/notifications/devices',staff,{...body,serverOrigin:'https://user:pass@example.test'},'PUT')).status,400);
 });

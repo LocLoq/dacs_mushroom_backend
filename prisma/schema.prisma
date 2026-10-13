@@ -612,6 +612,7 @@ model PushDevice {
   token String @db.Text
   identityHash String @unique @map("identity_hash") @db.Char(64)
   provider String @default("legacy") @db.VarChar(20)
+  serverOrigin String? @map("server_origin") @db.VarChar(512)
   p256dh String? @db.VarChar(100)
   auth String? @db.VarChar(50)
   apnsEnvironment String? @map("apns_environment") @db.VarChar(10)

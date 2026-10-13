@@ -1,80 +1,97 @@
-# Push UnifiedPush/APNs và triển khai VPS, LAN, VS Code tunnel
+# Firebase/FCM cho Android và iOS
 
-Thông báo trong app, phân quyền, lịch sử, WebSocket refresh và outbox giữ nguyên. Android dùng ntfy distributor qua UnifiedPush; iOS gửi thẳng APNs. Không cần dự án Firebase. Bundle ID giữ `com.example.thu`, iOS 15+.
+Backend và Flutter đã trở lại Firebase Cloud Messaging. Nhân viên chỉ dùng tài khoản đăng nhập trong bảng `users`; FCM đăng ký thiết bị tự động, không cần tài khoản ntfy/distributor. Application ID Android và bundle ID iOS hiện là **com.loql.layla.themushroomapp**. macOS cũng dùng cùng bundle ID mới; Dart package vẫn là `thu`.
 
-## Chuyển đổi database và API
+## Tạo cấu hình Firebase lần đầu
 
-1. Tắt push (`PUSH_ENABLED=false`) và dừng phiên bản API cũ trước migration.
-2. Chạy `npm run db:migrate:staff`, sau đó `npm run db:migrate:push`, `npm run prisma:validate`, `npm run prisma:generate`.
-3. Khởi động API mới; cập nhật app; đăng nhập và đăng ký lại thiết bị. Chỉ bật từng kênh sau khi hoàn tất cấu hình.
+1. Tạo một dự án trong [Firebase Console](https://console.firebase.google.com/).
+2. Thêm Android app với package **com.loql.layla.themushroomapp**. Tải `google-services.json` vào `dacs_mushroom_flutter/android/app/google-services.json`. Gradle tự áp dụng Google Services khi file tồn tại.
+3. Thêm iOS app với bundle ID **com.loql.layla.themushroomapp**. Tải `GoogleService-Info.plist` vào `dacs_mushroom_flutter/ios/Runner/GoogleService-Info.plist`; mở `Runner.xcworkspace` trong Xcode và thêm file vào target Runner/Copy Bundle Resources.
+4. Project settings > Service accounts > Generate new private key: tải service account JSON, lưu tại backend `secrets/firebase-admin.json`. Không đưa file service account vào app hoặc Git.
+5. Điền `FIREBASE_PROJECT_ID` trong backend `.env` bằng project ID thực. Bật `PUSH_ENABLED=true` rồi restart backend. Android/iOS và service account phải thuộc cùng một dự án Firebase.
 
-Migration push giữ notifications và deliveries đã gửi, vô hiệu hóa đăng ký cũ và đánh dấu `cancelled_at` cho delivery cũ chưa gửi. Không suy ra quyền lô từ công việc cũ. `db:migrate:push -- --check` kiểm tra trước; chạy lại migration không xóa lịch sử.
+Theo [Firebase Admin setup](https://firebase.google.com/docs/admin/setup) và [FCM Flutter setup](https://firebase.google.com/docs/cloud-messaging/flutter/get-started).
 
-API có JWT:
+## Backend local trên máy hiện tại
 
-- `GET /api/notifications/push-config`: `{data:{mode,apiUrl,ntfyUrl,vapidPublicKey,version,channels:{unifiedpush,apns}}}`. Không trả khóa riêng.
-- `PUT /api/notifications/devices` Android: `{platform:"android",provider:"unifiedpush",token:"https://push.example.com/up...?...",keys:{p256dh:"...",auth:"..."}}`.
-- iOS: `{platform:"ios",provider:"apns",token:"<64 hex characters>",apnsEnvironment:"sandbox"}` hoặc `production`.
-- PUT trả `{data:{registrationId}}`; lưu ID này. DELETE gửi `{token,registrationId}`. ID ngăn một yêu cầu logout cũ hủy đăng ký vừa chuyển tài khoản.
-- Các API danh sách, chi tiết, đọc và đọc tất cả giữ nguyên. Push chỉ có nội dung chung, notification ID, origin, user ID và mã phiên đăng ký; app đọc thông báo/công việc bằng API xác thực trước khi mở.
+`.env` đã chuẩn bị:
 
-Thiết bị dùng TEXT cho endpoint, khóa SHA-256 trên provider/môi trường/token, khóa Web Push, trạng thái active và registrationId. Rebind, đổi khóa, logout hoặc endpoint không còn hiệu lực hủy delivery chưa gửi, giữ lịch sử. APNs error cũ có timestamp hoặc phiên đăng ký cũ không được vô hiệu hóa đăng ký mới.
-
-Bull đọc outbox mỗi 15 giây, tối đa 5 lần với backoff 60/120/240/480 giây. HTTP 429/5xx và lỗi mạng được retry; lỗi khóa/quyền/cấu hình giữ delivery, kiểm tra lại sau 5 phút để có thể sửa cấu hình. HTTP 404/410 ntfy, APNs Unregistered/BadDeviceToken vô hiệu hóa đúng phiên. Hai provider độc lập; một kênh thiếu cấu hình không chặn kênh kia hoặc giao dịch nghiệp vụ. Gửi là at-least-once: worker chết sau khi provider nhận có thể gửi lại; notification ID dùng làm tag/collapse ID.
-
-## Chọn profile
-
-Sao chép `.env.docker.example` thành `.env.docker`, điền các mật khẩu/JWT/classifier token; hợp nhất một file `deploy/.env.vps.example`, `.env.lan.example` hoặc `.env.tunnel.example`, thay các giá trị mẫu. Không giữ hai biến trùng tên với giá trị khác nhau.
-
-| Chế độ | API | ntfy | Bind host |
-|---|---|---|---|
-| VPS | HTTPS tên miền API | HTTPS tên miền push | 127.0.0.1, Caddy xuất 80/443 |
-| LAN | http://192.168.1.10:8080 | http://192.168.1.10:8081 | IP LAN thực tế của máy host |
-| tunnel | URL HTTPS port 8080 | URL HTTPS port 8081 | 127.0.0.1 |
-
-LAN/tunnel: `docker compose --env-file .env.docker -f compose.yaml -f compose.push.yaml up -d --build`.
-VPS: thêm `-f compose.vps.yaml` vào lệnh trước `up`; trỏ DNS hai tên miền tới VPS và mở 80/443. Caddy cấp HTTPS và proxy cả Socket.IO/WebSocket. Cache/auth ntfy và dữ liệu TLS Caddy dùng volume bền vững. API/ntfy có healthcheck. Database và Redis không publish port ra host.
-
-Profile LAN thay **cả URL và bind address** bằng IP của máy host; điện thoại cùng mạng/VPN. Firewall chỉ mở hai cổng cần dùng cho mạng đó. Khi chạy Node trực tiếp, dùng `API_LISTEN_HOST` của profile; trong container API luôn listen 0.0.0.0, còn publish port vào bind address của host. Backend LAN vẫn cần Internet tới Apple để gửi APNs; iOS luôn nhận qua Apple. Android dùng kết nối ntfy từ điện thoại/distributor tới host. HTTP chỉ được chấp nhận cho origin LAN nội bộ được cấu hình; VPS/tunnel bắt buộc HTTPS. Không bỏ kiểm tra chứng chỉ TLS.
-
-## ntfy và tài khoản nhân viên
-
-Container dùng deny-all và auth/cache volume. Không thiết lập firebase-key-file hoặc upstream-base-url. Cấp **một tài khoản riêng cho mỗi nhân viên**, không dùng tài khoản ntfy admin trên điện thoại. Ví dụ (thêm đúng các `--env-file`/`-f` như lệnh khởi động):
-
-```sh
-docker compose --env-file .env.docker -f compose.yaml -f compose.push.yaml exec ntfy ntfy access '*' 'up*' write-only
-docker compose --env-file .env.docker -f compose.yaml -f compose.push.yaml exec ntfy ntfy user add --role=user staff01
-docker compose --env-file .env.docker -f compose.yaml -f compose.push.yaml exec ntfy ntfy access staff01 'up*' read-only
+```dotenv
+PUSH_HOST_MODE=lan
+API_LISTEN_HOST=0.0.0.0
+API_PUBLIC_URL=http://192.168.1.12:8080
+PUSH_ENABLED=false
+GOOGLE_APPLICATION_CREDENTIALS=secrets/firebase-admin.json
+FIREBASE_PROJECT_ID=
+FIREBASE_USE_ADC=false
+REDIS_URL=redis://127.0.0.1:6379
+SKIP_SEED=1
 ```
 
-Lệnh add hỏi mật khẩu tương tác. Admin trao thông tin đăng nhập cho đúng nhân viên. Anonymous chỉ có quyền ghi `up*` để server ứng dụng có thể gửi UnifiedPush; không được đọc. Mỗi nhân viên chỉ đọc `up*`; nội dung được mã hóa `aes128gcm`, khóa giải mã do connector trên thiết bị giữ. Có thể thu hồi tài khoản bằng `ntfy user del staff01` và hủy đăng ký thiết bị ứng dụng tương ứng.
+PUSH_ENABLED bật khi bạn đã cung cấp service account và cấu hình Firebase hợp lệ. Thông báo trong app và WebSocket vẫn hoạt động. Với MySQL/Redis đang chạy, khởi động API bằng:
 
-Theo [cấu hình UnifiedPush của ntfy](https://docs.ntfy.sh/config/#example-unifiedpush). Cài bản ntfy Android hỗ trợ UnifiedPush, ví dụ bản F-Droid được [UnifiedPush hướng dẫn](https://unifiedpush.org/users/distributors/ntfy/). Trong ntfy, đặt default server tới URL hiển thị trong app, thêm tài khoản nhân viên, chọn distributor trong cài đặt app rồi đăng ký lại. Không tự tạo topic/endpoint trong Flutter: connector cung cấp endpoint và khóa. Backend giữ nguyên endpoint/query; chỉ cho phép đúng origin và topic `up*`, không theo redirect.
+```powershell
+npm run start:local:push
+```
 
-Tạo một cặp VAPID bằng `npm run push:vapid`, lưu privateKey ở cấu hình triển khai, publicKey ở `VAPID_PUBLIC_KEY`, privateKey ở `VAPID_PRIVATE_KEY`, subject ở `VAPID_SUBJECT=mailto:...`. Giữ nguyên cặp khóa qua lần khởi động; đổi khóa cần đăng ký lại. Bật `PUSH_ENABLED=true`, `UNIFIEDPUSH_ENABLED=true`, restart API.
+Không cần ntfy hoặc port 8081. Script chỉ khởi động API/Bull, không seed lại dữ liệu. Nếu cần classifier, chạy `npm run classifier:serve` trong terminal khác hoặc `npm run start:stack` thay lệnh trên (không chạy hai API cùng port).
 
-## VS Code Ports
+Sau khi thêm file Google Services, build lại app:
 
-Khởi động profile tunnel với bind localhost. Trong VS Code mở **Ports: Focus on Ports View**, forward **8080 và 8081**, đổi visibility của cả hai thành **Public**, sao chép hai URL HTTPS khác nhau vào `API_PUBLIC_URL` và `NTFY_PUBLIC_URL`. Restart API/ntfy với base URL mới. App chọn VS Code tunnel và nhập URL **API 8080**; ntfy distributor dùng URL **ntfy 8081** từ push-config.
+```powershell
+flutter pub get
+flutter run
+# hoặc
+flutter build apk --release
+```
 
-API vẫn cần JWT; ntfy vẫn cần tài khoản riêng để đọc. Public tunnel cho phép điện thoại/ntfy truy cập mà không đăng nhập Microsoft. Flutter gửi Accept JSON và header bỏ trang trung gian của tunnel; Socket.IO dùng WSS và cùng header. “Lưu và kiểm tra” xác nhận REST `/api/test` **và** Socket.IO trước khi lưu thành công. HTML/interstitial không được coi là API thành công.
+App mới có ID khác bản cũ, cần cài bản mới và đăng nhập/đăng ký thiết bị lại. Firebase tự sinh FCM token sau khi nhân viên đăng nhập và cho phép thông báo. Android dùng thiết bị/giả lập có Google Play Services.
 
-Máy host, VS Code và tunnel phải đang chạy. Khi URL thay đổi, cập nhật cấu hình/restart rồi chọn đăng ký lại trong app/distributor; không ghép hostname mới vào endpoint đã lưu. App đổi origin sẽ đăng xuất, hủy socket/listener và đăng ký push của phiên cũ. Mỗi chế độ nhớ riêng URL; URL cũ được giữ khi nâng cấp. Bản mới mặc định VPS và yêu cầu nhập địa chỉ.
+Trong Flutter mở **Cài đặt > Thông báo trên thiết bị**, nhập IP/URL backend vào ô **IP/URL backend cho API và thông báo**, rồi **Lưu địa chỉ** hoặc **Lưu và kiểm tra**. Có thể nhập IP kèm cổng, URL LAN hoặc HTTPS/tunnel; địa chỉ được lưu chung với cấu hình API. Đổi địa chỉ sẽ đăng xuất để bạn đăng nhập lại và đăng ký thiết bị. Backend lưu origin do app gửi theo từng thiết bị; khi IP máy thay đổi, chỉ cần tự cập nhật trong app, không cần tự sửa API_PUBLIC_URL. FCM vẫn nhận qua Firebase; ô này là địa chỉ backend đăng ký/đọc thông báo. Cho phép port 8080 qua firewall của mạng LAN nếu điện thoại không kết nối được. API vẫn xác thực JWT.
 
-Xem [VS Code port forwarding](https://code.visualstudio.com/docs/debugtest/port-forwarding) và [dev tunnels security/interstitial](https://learn.microsoft.com/en-us/azure/developer/dev-tunnels/security). Tunnel dùng relay Microsoft, không hoạt động khi host/tunnel tắt.
+## iOS
 
-## APNs trực tiếp
+Firebase vẫn dùng APNs để đưa thông báo đến iPhone. Cần quyền push của Apple Developer, App ID/provisioning cho bundle ID mới, bật Push Notifications và Background Modes > Remote notifications trong Xcode. Tạo khóa APNs hoặc chứng chỉ phù hợp và tải lên Firebase Project settings > Cloud Messaging > Apple app configuration; giữ khóa Apple ngoài app/Git. Backend không còn dùng HTTP/2 APNs hoặc `.p8` trực tiếp.
 
-Đặt khóa Apple `.p8` ngoài Git, ví dụ `secrets/AuthKey.p8` (mount read-only `/run/push/AuthKey.p8`), điền `APNS_KEY_FILE`, `APNS_KEY_ID`, `APNS_TEAM_ID`, `APNS_TOPIC=com.example.thu`. Khi chạy Node trực tiếp, KEY_FILE phải là đường dẫn thực trên máy host. Bật `PUSH_ENABLED=true`, `APNS_ENABLED=true`, restart API. Không cung cấp khóa Apple cho Flutter.
+[Hướng dẫn FCM Flutter](https://firebase.google.com/docs/cloud-messaging/flutter/get-started) yêu cầu APNs token có sẵn trước khi lấy FCM token; app đã xử lý chờ/thử lại. Xử lý foreground, background và mở từ trạng thái đóng theo [FCM receive messages](https://firebase.google.com/docs/cloud-messaging/flutter/receive-messages). Build/sign/test iOS cần macOS/Xcode và thiết bị phù hợp. Chưa có key/project thì chưa thể nhận push thật.
 
-HTTP/2 TLS tới Apple, JWT ES256 cache dưới 1 giờ, môi trường lấy từ đăng ký thiết bị; Debug dùng sandbox, Release/Profile production theo entitlements hiện có. Trong Xcode bật Push Notifications và chọn provisioning profile có quyền push. Native Swift xin quyền/đăng ký token, chuyển token và foreground/tap sang Dart, giữ notification mở từ cold start. Người dùng từ chối quyền vẫn dùng lịch sử thông báo. iOS có mô tả quyền mạng nội bộ, ATS local networking và exception IP LAN; Android release có network security config và kiểm tra origin theo chế độ ở Dart.
+## API và dữ liệu
 
-Theo [Apple APNs server](https://developer.apple.com/documentation/usernotifications/setting-up-a-remote-notification-server), [request APNs](https://developer.apple.com/documentation/usernotifications/sending-notification-requests-to-apns), [quyền mạng nội bộ](https://developer.apple.com/documentation/BundleResources/Information-Property-List/NSLocalNetworkUsageDescription) và [ATS local networking/IP](https://developer.apple.com/documentation/bundleresources/information-property-list/nsapptransportsecurity/nsallowslocalnetworking).
+- `GET /api/notifications/push-config`: `{data:{mode,apiUrl,provider:"fcm",projectId,version,channels:{fcm}}}`. Không trả credential.
+- `PUT /api/notifications/devices`: `{platform:"android"|"ios",provider:"fcm",token:"<FCM token>",serverOrigin:"<origin backend app đã chọn>"}`. Có thể bỏ provider; mặc định fcm. Trả `data.registrationId` và `data.serverOrigin`. Origin dùng từ từng thiết bị, API_PUBLIC_URL chỉ là fallback cho client cũ.
+- `DELETE /api/notifications/devices`: `{token,registrationId}`. Chỉ hủy đúng đăng ký của tài khoản hiện tại; request logout cũ không hủy đăng ký mới.
+- Các API lịch sử, chi tiết, unread/read/read-all giữ nguyên, dùng JWT và tài khoản `users`.
 
-## Kiểm tra thực tế trước bật production
+Đổi tài khoản, logout hoặc đổi origin hủy đăng ký cũ; token thay đổi đăng ký lại. Push chỉ có nội dung chung và notification ID/định danh phiên; khi mở, app đọc thông báo/công việc qua API và kiểm tra quyền hiện tại. WebSocket chỉ gửi refresh. Sender dùng notification ID làm tag/collapse ID; retry tối đa 5 lần và outbox đọc mỗi 15 giây. Lỗi Firebase không làm thất bại nghiệp vụ; lỗi token vô hiệu hóa đúng phiên, lỗi cấu hình giữ delivery để có thể sửa và chạy lại.
 
-Chạy `npm test`, `npm run test:db`, Prisma validate/generate, `flutter analyze --no-fatal-infos`, `flutter test`, `flutter build apk --release`. Test tự động kiểm tra provider, mã hóa/redirect LAN, ES256/APNs môi trường, retry/cancel/rebind, migration và mock API; không thay thế thử thiết bị thật.
+Migration: `npm run db:migrate:push` chuẩn bị các cột durable registration của lịch sử nâng cấp; `npm run db:migrate:firebase` hủy delivery UnifiedPush/APNs chưa gửi và vô hiệu hóa thiết bị cũ, giữ thông báo và delivery đã gửi. Không rollback/drop bảng dữ liệu. Các cột/migration cũ được giữ để nâng cấp database tương thích; sender/registration hiện chỉ dùng FCM.
 
-Thử Android foreground/background/app đóng, distributor chưa cài, đổi tài khoản, endpoint/khóa/URL thay đổi; thử LAN trên điện thoại cùng mạng, VPS HTTPS, hai public tunnel qua mạng di động và tunnel đóng. Thử iOS từ chối quyền LAN, APNs sandbox/production, mở công việc đã mất quyền và cold start. Nghiệm thu iOS cần macOS/Xcode, thiết bị thật và khóa Apple hợp lệ. Compose/runtime ntfy và các URL triển khai cần Docker/host thực tế. APK hiện dùng cấu hình signing có sẵn của dự án; cấu hình keystore phát hành riêng trước phân phối.
+## VPS, LAN và VS Code tunnel
 
-Connector Android dùng nguồn chính thức `unifiedpush_android` 3.5.0 trong `third_party` với một sửa Gradle để áp dụng Kotlin plugin cho AGP 8.9.1; hành vi connector không thay đổi. App hợp nhất dependency Tink về `tink-android:1.23.0` theo hướng dẫn package để tránh duplicate classes. Xem `third_party/unifiedpush_android/LOCAL_PATCH.md`.
+Ba lựa chọn chỉ thay đường kết nối **API**, còn Android/iOS đều nhận FCM qua Internet.
+
+- LAN: dùng `.env.lan.example`, API HTTP với IP nội bộ; điện thoại cùng mạng/VPN. Backend và điện thoại vẫn cần Internet tới Firebase/Apple để nhận push.
+- VPS: dùng `.env.vps.example`, API HTTPS qua Caddy và một tên miền API.
+- VS Code tunnel: dùng `.env.tunnel.example`, forward **chỉ port 8080**, đặt Public, ghi URL HTTPS vào API_PUBLIC_URL, restart API. App giữ bộ kiểm tra REST/Socket.IO và header tránh trang trung gian; đổi URL sẽ đăng xuất và đăng ký lại.
+
+Docker: hợp nhất `.env.docker.example` với một profile, đặt Firebase credential ở `secrets/firebase-admin.json`, bật PUSH_ENABLED rồi chạy:
+
+```sh
+docker compose --env-file .env.docker -f compose.yaml -f compose.push.yaml up -d --build
+# VPS: thêm -f compose.vps.yaml trước up
+```
+
+Key được mount read-only tại `/run/firebase/firebase-admin.json`. Có thể đổi thư mục bằng FIREBASE_CREDENTIALS_DIR. Không còn service/cache/auth volume ntfy trong Compose. [VS Code ports](https://code.visualstudio.com/docs/debugtest/port-forwarding) và [dev tunnel interstitial](https://learn.microsoft.com/en-us/azure/developer/dev-tunnels/security).
+
+## Gửi thử sau khi thiết bị đã đăng ký
+
+```powershell
+npm run push:test -- --username TEN_DANG_NHAP_APP --platform android
+npm run push:test -- --username TEN_DANG_NHAP_APP --platform ios
+```
+
+Lệnh tạo một thông báo thử và delivery cho thiết bị tương ứng của chính username bạn chọn. Chờ tối đa khoảng 15 giây. Dùng username app trong bảng users. Để kiểm tra công việc có liên kết, admin giao việc/duyệt minh chứng như luồng thật.
+
+Kiểm tra tự động: `npm test`, `npm run test:db`, Prisma validate/generate, Flutter analyzer/tests và APK release. Push thật chưa nghiệm thu nếu thiếu project, key và thiết bị.
+
+Migration bổ sung origin theo thiết bị: `npm run db:migrate:push-origin`. Cột nullable giữ tương thích dữ liệu cũ; đổi origin tạo registrationId mới và hủy delivery đang chờ. API_PUBLIC_URL có thể bỏ trống khi client mới gửi serverOrigin; không tự dò hoặc ghi IP vào cấu hình.

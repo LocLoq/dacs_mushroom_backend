@@ -14,7 +14,10 @@
     "postinstall": "prisma generate",
     "db:migrate:staff": "node scripts/migrate-staff-workflow.cjs",
     "db:migrate:push": "node scripts/migrate-push.cjs",
-    "push:vapid": "node -e \"console.log(JSON.stringify(require('web-push').generateVAPIDKeys(),null,2))\""
+    "start:local:push": "node scripts/start-local-push.cjs",
+    "push:test": "node scripts/test-local-push.cjs",
+    "db:migrate:firebase": "node scripts/migrate-firebase-push.cjs",
+    "db:migrate:push-origin": "node scripts/migrate-push-origin.cjs"
   },
   "dependencies": {
     "@prisma/adapter-mariadb": "^7.9.1",
@@ -27,6 +30,7 @@
     "exceljs": "^4.4.0",
     "express": "^5.2.1",
     "express-rate-limit": "^8.7.1",
+    "firebase-admin": "^14.5.0",
     "form-data": "^4.0.6",
     "jsonwebtoken": "^9.0.3",
     "mariadb": "^3.5.3",
@@ -37,7 +41,6 @@
     "socket.io": "^4.8.3",
     "socket.io-client": "^4.8.3",
     "swagger-ui-express": "^5.0.1",
-    "web-push": "^3.6.7",
     "yamljs": "^0.3.0"
   }
 }

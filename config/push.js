@@ -19,41 +19,26 @@ function hostUrl(value, mode) {
 function pushConfig(env = process.env) {
     const mode = env.PUSH_HOST_MODE || 'vps';
     if (!['vps', 'lan', 'tunnel'].includes(mode)) throw new Error('Invalid PUSH_HOST_MODE');
-    const ntfyUrl = env.NTFY_PUBLIC_URL ? hostUrl(env.NTFY_PUBLIC_URL, mode) : null;
     const apiUrl = env.API_PUBLIC_URL ? hostUrl(env.API_PUBLIC_URL, mode) : null;
     const enabled = env.PUSH_ENABLED === 'true';
-    const unifiedpush = enabled && env.UNIFIEDPUSH_ENABLED === 'true' && !!(apiUrl && ntfyUrl && env.VAPID_PUBLIC_KEY && env.VAPID_PRIVATE_KEY && env.VAPID_SUBJECT);
-    const apns = enabled && env.APNS_ENABLED === 'true' && !!(apiUrl && env.APNS_KEY_FILE && env.APNS_KEY_ID && env.APNS_TEAM_ID && env.APNS_TOPIC);
-    const version = crypto.createHash('sha256').update(JSON.stringify([mode, ntfyUrl, apiUrl, env.VAPID_PUBLIC_KEY, env.APNS_TOPIC, unifiedpush, apns])).digest('hex').slice(0, 20);
-    return { mode, ntfyUrl, apiUrl, vapidPublicKey: env.VAPID_PUBLIC_KEY || null, channels: { unifiedpush, apns }, version };
+    const version = crypto.createHash('sha256').update(JSON.stringify([mode, apiUrl, 'fcm', env.FIREBASE_PROJECT_ID || null, enabled])).digest('hex').slice(0,20);
+    return { mode, apiUrl, provider: 'fcm', projectId: env.FIREBASE_PROJECT_ID || null, channels: { fcm: enabled }, version };
 }
 function deviceIdentity(provider, environment, token) {
     return crypto.createHash('sha256').update(JSON.stringify([provider, environment || '', token])).digest('hex');
 }
-function endpointUrl(token, config = pushConfig()) {
-    const url = new URL(token);
-    if (!config.ntfyUrl || url.origin !== config.ntfyUrl || url.username || url.password || url.hash || !/^\/up[A-Za-z0-9_-]+$/.test(url.pathname)) throw new Error('Endpoint must belong to the configured ntfy origin and up topic');
-    return url;
-}
 function validateDevice(body, config = pushConfig()) {
-    const { platform, provider, apnsEnvironment } = body;
-    let token = body.token;
-    if (typeof token !== 'string' || !token.length || token !== token.trim() || token.length > 8192) throw new Error('Invalid token');
-    const data = { platform, provider, token, p256dh: null, auth: null, apnsEnvironment: null };
-    if (platform === 'android' && provider === 'unifiedpush') {
-        endpointUrl(token, config);
-        const keys = body.keys;
-        if (!keys || Object.keys(keys).some(k => !['p256dh', 'auth'].includes(k)) || !/^[\w-]{87}$/.test(keys.p256dh || '') || !/^[\w-]{22}$/.test(keys.auth || '')) throw new Error('Invalid Web Push keys');
-        const publicKey = Buffer.from(keys.p256dh, 'base64url');
-        if (publicKey.length !== 65 || publicKey[0] !== 4) throw new Error('Invalid P-256 public key');
-        // Reject invalid points before accepting an encrypted registration.
-        crypto.ECDH.convertKey(publicKey, 'prime256v1');
-        Object.assign(data, keys);
-        if (apnsEnvironment !== undefined) throw new Error('Unexpected APNs environment');
-    } else if (platform === 'ios' && provider === 'apns') {
-        if (!/^[a-fA-F0-9]{64}$/.test(token) || !['sandbox', 'production'].includes(apnsEnvironment) || body.keys !== undefined) throw new Error('Invalid APNs registration');
-        data.token = token.toLowerCase(); data.apnsEnvironment = apnsEnvironment;
-    } else throw new Error('Invalid platform/provider');
-    return { ...data, identityHash: deviceIdentity(provider, data.apnsEnvironment, data.token) };
+    const { platform, token } = body;
+    const provider = body.provider || 'fcm';
+    if (!['android','ios'].includes(platform) || provider !== 'fcm') throw new Error('Invalid platform/provider');
+    if (typeof token !== 'string' || !token.length || token.length > 4096 || token !== token.trim() || /[\s\x00-\x1f\x7f]/.test(token) || /^https?:\/\//i.test(token)) throw new Error('Invalid FCM token');
+    if (body.keys !== undefined || body.apnsEnvironment !== undefined) throw new Error('FCM registration does not accept UnifiedPush/APNs keys');
+    let serverOrigin = null;
+    if (body.serverOrigin !== undefined) {
+        if (typeof body.serverOrigin !== 'string' || body.serverOrigin.length > 512) throw new Error('Invalid serverOrigin');
+        serverOrigin = hostUrl(body.serverOrigin, config.mode);
+        if (serverOrigin.length > 512) throw new Error('Invalid serverOrigin');
+    }
+    return { platform, provider, token, serverOrigin, p256dh: null, auth: null, apnsEnvironment: null, identityHash: deviceIdentity(provider,null,token) };
 }
-module.exports = { pushConfig, hostUrl, privateHost, deviceIdentity, endpointUrl, validateDevice };
+module.exports = { pushConfig, hostUrl, privateHost, deviceIdentity, validateDevice };
