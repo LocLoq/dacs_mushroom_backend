@@ -552,3 +552,65 @@ test('changing push server origin creates a new registration and cancels pending
     assert.equal(payload.origin,'https://second.example.test');
     assert.equal((await request('/notifications/devices',staff,{...body,serverOrigin:'https://user:pass@example.test'},'PUT')).status,400);
 });
+
+async function bulkFixture(prefix) {
+    const target = await prisma.productionFacility.create({ data: { name: prefix, address: 'Test', facilityType: 'HOUSEHOLD' } });
+    const users = [];
+    for (const suffix of ['a','b','c']) users.push(await prisma.user.create({ data: { username: `${prefix}-${suffix}`, full_name: `${prefix} ${suffix}`, password_hash: 'unused', phone_number: '', email: '', role_id: staff.role_id, tokenver: 0 } }));
+    const targetBatch = await prisma.cultivationBatch.create({ data: { batchCode: prefix, facilityId: target.id, mushroomId: species.id, startDate: new Date() } });
+    return { target, users, targetBatch, path: `/production-facilities/${target.id}/staff`, batchPath: `/cultivation-batches/${targetBatch.id}/staff` };
+}
+test('staff candidates exclude assignments before search/pagination; bulk grants preserve the legacy API', {skip:!enabled}, async () => {
+    const f=await bulkFixture('bulk-candidates');
+    const first=await request(f.path,admin,{userId:f.users[0].id});assert.equal(first.status,201);assert.equal(first.body.data.userId,f.users[0].id);assert.equal(Array.isArray(first.body.data),false);
+    const list=await request(f.path+'?available=true&search=bulk-candidates&limit=1',admin);
+    assert.equal(list.status,200);assert.equal(list.body.pagination.totalItems,2);assert.equal(list.body.pagination.totalPages,2);assert.equal(list.body.data[0].id,f.users[1].id);
+    assert.deepEqual(Object.keys(list.body.data[0]).sort(),['full_name','id','username']);
+    const page2=await request(f.path+'?available=true&search=bulk-candidates&limit=1&page=2',admin);assert.equal(page2.body.data[0].id,f.users[2].id);
+    const bulk=await request(f.path,admin,{userIds:[f.users[0].id,f.users[1].id,String(f.users[1].id),f.users[2].id]});
+    assert.equal(bulk.status,201);assert.equal(bulk.body.addedCount,2);assert.equal(bulk.body.data.length,3);
+    assert.equal(await prisma.facilityStaff.count({where:{facilityId:f.target.id}}),3);
+    const notices=await prisma.notification.count({where:{userId:{in:f.users.map(u=>u.id)},type:'PERMISSION_GRANTED'}});assert.equal(notices,3);
+    const again=await request(f.path,admin,{userIds:f.users.map(u=>u.id)});assert.equal(again.body.addedCount,0);
+    assert.equal(await prisma.notification.count({where:{userId:{in:f.users.map(u=>u.id)},type:'PERMISSION_GRANTED'}}),notices);
+    assert.deepEqual((await request(f.path+'?available=true&search=bulk-candidates',admin)).body.data,[]);
+    assert.equal((await request(f.path+'?available=false',admin)).body.data.length,3);
+    await request(f.path+'/'+f.users[1].id,admin,undefined,'DELETE');
+    const available=await request(f.path+'?available=true&search=bulk-candidates',admin);assert.deepEqual(available.body.data.map(u=>u.id),[f.users[1].id]);
+    for(const actor of [manager,staff]) { assert.equal((await request(f.path+'?available=true',actor)).status,403);assert.equal((await request(f.path,actor,{userIds:[f.users[1].id]})).status,403); }
+    assert.equal((await request(f.path+'?available=maybe',admin)).status,400);
+});
+test('bulk batch assignment rolls back the whole group if membership or staff role changes', {skip:!enabled}, async () => {
+    const f=await bulkFixture('bulk-atomic');
+    const ids=f.users.map(u=>u.id);
+    await request(f.path,admin,{userIds:ids.slice(0,2)});
+    let candidates=await request(f.batchPath+'?available=true&search=bulk-atomic',admin);assert.deepEqual(candidates.body.data.map(u=>u.id),ids.slice(0,2));
+    await request(f.path+'/'+ids[1],admin,undefined,'DELETE');
+    let result=await request(f.batchPath,admin,{userIds:ids.slice(0,2)});assert.equal(result.status,400);assert.equal(result.body.code,'ASSIGNMENT_INELIGIBLE');assert.match(result.body.message,/bulk-atomic b/);
+    assert.equal(await prisma.batchStaff.count({where:{batchId:f.targetBatch.id}}),0);
+    assert.equal(await prisma.notification.count({where:{batchId:f.targetBatch.id,type:'PERMISSION_GRANTED'}}),0);
+    await request(f.path,admin,{userId:ids[1]});
+    await prisma.user.update({where:{id:ids[1]},data:{role_id:manager.role_id}});
+    result=await request(f.batchPath,admin,{userIds:ids.slice(0,2)});assert.equal(result.status,400);assert.match(result.body.message,/bulk-atomic b/);
+    assert.equal(await prisma.batchStaff.count({where:{batchId:f.targetBatch.id}}),0);
+    await prisma.user.update({where:{id:ids[1]},data:{role_id:staff.role_id}});
+    result=await request(f.batchPath,admin,{userIds:ids.slice(0,2)});assert.equal(result.status,201);assert.equal(result.body.addedCount,2);
+    assert.deepEqual((await request(f.batchPath+'?available=true&search=bulk-atomic',admin)).body.data,[]);
+    await request(f.batchPath+'/'+ids[0],admin,undefined,'DELETE');
+    assert.deepEqual((await request(f.batchPath+'?available=true&search=bulk-atomic',admin)).body.data.map(u=>u.id),[ids[0]]);
+    for(const body of [{userIds:[]},{userIds:Array(101).fill(ids[0])},{userIds:[ids[0],false]},{userIds:[ids[0]],userId:ids[1]},{userIds:[ids[0],manager.id]},{userIds:[ids[0],999999999]}]) assert.equal((await request(f.batchPath,admin,body)).status,400);
+    assert.equal(await prisma.batchStaff.count({where:{batchId:f.targetBatch.id}}),1);
+});
+test('two admins adding overlapping staff groups create one assignment and notification per person', {skip:!enabled}, async () => {
+    const f=await bulkFixture('bulk-concurrent');
+    const secondAdmin=await prisma.user.create({data:{username:'bulk-second-admin',full_name:'Other admin',password_hash:'unused',phone_number:'',email:'',role_id:admin.role_id,tokenver:0}});
+    const result=await Promise.all([request(f.path,admin,{userIds:f.users.map(u=>u.id)}),request(f.path,secondAdmin,{userIds:f.users.map(u=>u.id)})]);
+    assert.deepEqual(result.map(r=>r.status),[201,201]);assert.deepEqual(result.map(r=>r.body.addedCount).sort(),[0,3]);
+    assert.equal(await prisma.facilityStaff.count({where:{facilityId:f.target.id}}),3);
+    assert.equal(await prisma.notification.count({where:{userId:{in:f.users.map(u=>u.id)},type:'PERMISSION_GRANTED'}}),3);
+    await request(f.path,admin,{userIds:f.users.map(u=>u.id)});
+    const batchResult=await Promise.all([request(f.batchPath,admin,{userIds:f.users.map(u=>u.id)}),request(f.batchPath,secondAdmin,{userIds:f.users.map(u=>u.id)})]);
+    assert.deepEqual(batchResult.map(r=>r.status),[201,201]);assert.deepEqual(batchResult.map(r=>r.body.addedCount).sort(),[0,3]);
+    assert.equal(await prisma.batchStaff.count({where:{batchId:f.targetBatch.id}}),3);
+    assert.equal(await prisma.notification.count({where:{batchId:f.targetBatch.id,type:'PERMISSION_GRANTED'}}),3);
+});

@@ -60,3 +60,7 @@ npm test; npm run test:db (database tạm, không thay dữ liệu ứng dụng)
 ### Flutter tests trên đường dẫn Windows hiện tại
 
 Flutter SDK 3.41.6 sinh test listener không escape dấu nháy đơn trong đường dẫn `hdd's data`. Đã xác nhận tests chạy qua junction trỏ tới cùng dự án: `Set-Location "$env:TEMP\mushroom-frontend-live"; flutter test`. Đây là đường dẫn tạm đã tạo trong phiên này; dữ liệu vẫn ở dacs_mushroom_flutter.
+
+## Thêm nhiều nhân viên vào cơ sở/lô
+
+Trong màn phân công, chọn nhiều người và xác nhận một lần. Picker lấy GET /staff?available=true: chỉ staff chưa được phân công, với lô phải đang thuộc cơ sở của lô. Lọc xảy ra trước phân trang/tìm kiếm. POST nhận userIds (1–100 ID, loại trùng); userId đơn vẫn tương thích. Nếu bất kỳ người nào không còn hợp lệ, toàn bộ lượt thêm rollback; form giữ lựa chọn và lỗi. Các chip tên cho phép bỏ chọn cả người ở trang khác hoặc đã mất điều kiện. Phân công đã được admin khác thêm được bỏ qua an toàn; chỉ thông báo cho phân công mới. Không thay đổi schema hoặc cách thu hồi từng người.

@@ -24,9 +24,22 @@ function createStaffRouter(kind) {
         return facility;
     };
     router.get('/:id/staff', ...auth, handle(async (req, res) => {
-        await parent(prisma, req);
+        const record = await parent(prisma, req);
         const paging = pagination(req.query, 100, 20);
         const search = req.query.search === undefined ? null : textField(req.query.search, 'search', 255, true);
+        if (req.query.available !== undefined && !['true','false'].includes(req.query.available)) fail(400, 'available phải là true hoặc false');
+        if (req.query.available === 'true') {
+            const parentId = id(req.params.id);
+            const where = { role: { name: 'staff' },
+                ...(batch ? { facilityMemberships: { some: { facilityId: record.facilityId } }, batchAssignments: { none: { batchId: parentId } } }
+                    : { facilityMemberships: { none: { facilityId: parentId } } }),
+                ...(search ? { OR: [{ username: { contains: search } }, { full_name: { contains: search } }] } : {}) };
+            const [total, rows] = await Promise.all([prisma.user.count({ where }), prisma.user.findMany({
+                where, skip: paging.skip, take: paging.limit, orderBy: [{ full_name: 'asc' }, { id: 'asc' }],
+                select: { id: true, username: true, full_name: true }
+            })]);
+            return res.json(pageResponse(rows, total, paging));
+        }
         const where = { [parentField]: id(req.params.id), ...(search ? { user: { OR: [{ username: { contains: search } }, { full_name: { contains: search } }] } } : {}) };
         const [total, rows] = await Promise.all([
             prisma[model].count({ where }), prisma[model].findMany({ where, skip: paging.skip, take: paging.limit,
@@ -36,27 +49,44 @@ function createStaffRouter(kind) {
     }));
     const audit = (action) => auditAction(`${kind.toUpperCase()}_STAFF_${action}`, { entityType: kind, entityId: (req) => req.params.id });
     router.post('/:id/staff', ...auth, audit('GRANT'), handle(async (req, res) => {
-        fields(req.body, ['userId']);
-        const userId = id(req.body.userId);
+        fields(req.body, ['userId', 'userIds']);
+        const bulk = req.body.userIds !== undefined;
+        if (bulk && req.body.userId !== undefined || !bulk && req.body.userId === undefined) fail(400, 'Chỉ gửi userId hoặc userIds');
+        if (bulk && (!Array.isArray(req.body.userIds) || !req.body.userIds.length || req.body.userIds.length > 100)) fail(400, 'Chọn từ 1 đến 100 nhân viên');
+        const userIds = [...new Set((bulk ? req.body.userIds : [req.body.userId]).map(id))];
         const parentId = id(req.params.id);
-        const result = await workflowTransaction(prisma, async (tx) => {
+        const result = await workflowTransaction(prisma, async tx => {
             const record = await parent(tx, req, true);
-            const user = await tx.user.findUnique({ where: { id: userId }, include: { role: true } });
-            if (!user || user.role.name !== 'staff') fail(400, 'Chỉ phân công tài khoản nhân viên');
-            if (batch && !await tx.facilityStaff.findUnique({ where: { facilityId_userId: { facilityId: record.facilityId, userId } } })) {
-                fail(400, 'Nhân viên phải thuộc cơ sở sản xuất của lô');
+            const users = await tx.user.findMany({ where: { id: { in: userIds } }, include: { role: true } });
+            const byId = new Map(users.map(user => [user.id,user]));
+            const invalid = userIds.filter(userId => byId.get(userId)?.role.name !== 'staff');
+            if (invalid.length) fail(400, 'Không thể phân công: ' + invalid.map(userId => byId.get(userId)?.full_name || byId.get(userId)?.username || ('ID ' + userId)).join(', ') + '. Chỉ chọn tài khoản nhân viên.', 'ASSIGNMENT_INELIGIBLE');
+            if (batch) {
+                const members = await tx.facilityStaff.findMany({ where: { facilityId: record.facilityId, userId: { in: userIds } }, select: { userId: true } });
+                const eligible = new Set(members.map(member => member.userId));
+                const invalid = userIds.filter(userId => !eligible.has(userId));
+                if (invalid.length) fail(400, 'Nhân viên không còn thuộc cơ sở của lô: ' + invalid.map(userId => byId.get(userId).full_name || byId.get(userId).username).join(', '), 'ASSIGNMENT_INELIGIBLE');
             }
-            const where = { [key]: { [parentField]: parentId, userId } };
-            const exists = await tx[model].findUnique({ where });
-            const assignment = exists || await tx[model].create({ data: { [parentField]: parentId, userId, grantedByUserId: req.user.id } });
-            const notifications = exists ? [] : await notifyUsers(tx, { recipients: [userId], actorId: req.user.id,
-                eventKey: crypto.randomUUID(), type: 'PERMISSION_GRANTED', title: batch ? 'Bạn được phân công lô nuôi trồng' : 'Bạn được thêm vào cơ sở sản xuất', batchId: batch ? parentId : null });
-            return { assignment, notifications };
+            const assignments = [], addedUserIds = [];
+            for (const userId of userIds) {
+                const where = { [key]: { [parentField]: parentId, userId } };
+                let assignment = await tx[model].findUnique({ where });
+                if (!assignment) {
+                    assignment = await tx[model].create({ data: { [parentField]: parentId, userId, grantedByUserId: req.user.id } });
+                    addedUserIds.push(userId);
+                }
+                assignments.push(assignment);
+            }
+            const notifications = await notifyUsers(tx, { recipients: addedUserIds, actorId: req.user.id, eventKey: crypto.randomUUID(),
+                type: 'PERMISSION_GRANTED', title: batch ? 'Bạn được phân công lô nuôi trồng' : 'Bạn được thêm vào cơ sở sản xuất', batchId: batch ? parentId : null });
+            return { assignments, notifications, addedUserIds };
         });
         await publishNotifications(result.notifications);
-        await refreshUsers([userId, req.user.id], 'permissions');
-        await refreshUsers([userId, req.user.id], 'tasks');
-        res.status(201).json({ data: result.assignment });
+        if (result.addedUserIds.length) {
+            await refreshUsers([...result.addedUserIds, req.user.id], 'permissions');
+            await refreshUsers([...result.addedUserIds, req.user.id], 'tasks');
+        }
+        res.status(201).json(bulk ? { data: result.assignments, addedCount: result.addedUserIds.length } : { data: result.assignments[0] });
     }));
     router.delete('/:id/staff/:userId', ...auth, audit('REVOKE'), handle(async (req, res) => {
         const userId = id(req.params.userId);

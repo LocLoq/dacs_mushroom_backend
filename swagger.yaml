@@ -4964,7 +4964,7 @@ paths:
           $ref: '#/components/responses/ApiError'
   '/api/production-facilities/{id}/staff':
     get:
-      summary: 'Admin xem nhân viên được phân công'
+      summary: 'Admin xem phân công hoặc nhân viên có thể thêm'
       tags:
         - 'Công việc và thông báo'
       responses:
@@ -4997,13 +4997,39 @@ paths:
           in: query
           schema:
             type: string
+        -
+          name: available
+          in: query
+          description: 'true: chỉ staff đủ điều kiện và chưa được phân công; lọc trước phân trang. Với lô, phải thuộc cơ sở của lô.'
+          schema:
+            type: boolean
+            default: false
     post:
-      summary: 'Admin cấp quyền nhân viên; giao lô yêu cầu thành viên cơ sở'
+      summary: 'Admin thêm một hoặc nhiều nhân viên trong một transaction'
       tags:
         - 'Công việc và thông báo'
       responses:
         '201':
-          description: 'Thành công'
+          description: 'userId trả data object như cũ. userIds trả data array và addedCount; bỏ qua phân công đã tồn tại, không tạo thông báo trùng.'
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  -
+                    type: object
+                    properties:
+                      data:
+                        type: object
+                  -
+                    type: object
+                    properties:
+                      data:
+                        type: array
+                        items:
+                          type: object
+                      addedCount:
+                        type: integer
+                        minimum: 0
         default:
           $ref: '#/components/responses/ApiError'
       parameters:
@@ -5018,13 +5044,29 @@ paths:
         content:
           application/json:
             schema:
-              type: object
-              properties:
-                userId:
-                  type: integer
-                  minimum: 1
-              required:
-                - userId
+              oneOf:
+                -
+                  type: object
+                  additionalProperties: false
+                  required:
+                    - userId
+                  properties:
+                    userId:
+                      type: integer
+                      minimum: 1
+                -
+                  type: object
+                  additionalProperties: false
+                  required:
+                    - userIds
+                  properties:
+                    userIds:
+                      type: array
+                      minItems: 1
+                      maxItems: 100
+                      items:
+                        type: integer
+                        minimum: 1
   '/api/production-facilities/{id}/staff/{userId}':
     delete:
       summary: 'Admin thu hồi quyền, giữ lịch sử công việc'
@@ -5050,7 +5092,7 @@ paths:
             type: integer
   '/api/cultivation-batches/{id}/staff':
     get:
-      summary: 'Admin xem nhân viên được phân công'
+      summary: 'Admin xem phân công hoặc nhân viên có thể thêm'
       tags:
         - 'Công việc và thông báo'
       responses:
@@ -5083,13 +5125,39 @@ paths:
           in: query
           schema:
             type: string
+        -
+          name: available
+          in: query
+          description: 'true: chỉ staff đủ điều kiện và chưa được phân công; lọc trước phân trang. Với lô, phải thuộc cơ sở của lô.'
+          schema:
+            type: boolean
+            default: false
     post:
-      summary: 'Admin cấp quyền nhân viên; giao lô yêu cầu thành viên cơ sở'
+      summary: 'Admin thêm một hoặc nhiều nhân viên trong một transaction'
       tags:
         - 'Công việc và thông báo'
       responses:
         '201':
-          description: 'Thành công'
+          description: 'userId trả data object như cũ. userIds trả data array và addedCount; bỏ qua phân công đã tồn tại, không tạo thông báo trùng.'
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  -
+                    type: object
+                    properties:
+                      data:
+                        type: object
+                  -
+                    type: object
+                    properties:
+                      data:
+                        type: array
+                        items:
+                          type: object
+                      addedCount:
+                        type: integer
+                        minimum: 0
         default:
           $ref: '#/components/responses/ApiError'
       parameters:
@@ -5104,13 +5172,29 @@ paths:
         content:
           application/json:
             schema:
-              type: object
-              properties:
-                userId:
-                  type: integer
-                  minimum: 1
-              required:
-                - userId
+              oneOf:
+                -
+                  type: object
+                  additionalProperties: false
+                  required:
+                    - userId
+                  properties:
+                    userId:
+                      type: integer
+                      minimum: 1
+                -
+                  type: object
+                  additionalProperties: false
+                  required:
+                    - userIds
+                  properties:
+                    userIds:
+                      type: array
+                      minItems: 1
+                      maxItems: 100
+                      items:
+                        type: integer
+                        minimum: 1
   '/api/cultivation-batches/{id}/staff/{userId}':
     delete:
       summary: 'Admin thu hồi quyền, giữ lịch sử công việc'
