@@ -11,7 +11,10 @@
     "db:seed": "node prisma/seed.cjs",
     "prisma:generate": "prisma generate",
     "prisma:validate": "prisma validate",
-    "postinstall": "prisma generate"
+    "postinstall": "prisma generate",
+    "db:migrate:staff": "node scripts/migrate-staff-workflow.cjs",
+    "db:migrate:push": "node scripts/migrate-push.cjs",
+    "push:vapid": "node -e \"console.log(JSON.stringify(require('web-push').generateVAPIDKeys(),null,2))\""
   },
   "dependencies": {
     "@prisma/adapter-mariadb": "^7.9.1",
@@ -34,6 +37,7 @@
     "socket.io": "^4.8.3",
     "socket.io-client": "^4.8.3",
     "swagger-ui-express": "^5.0.1",
+    "web-push": "^3.6.7",
     "yamljs": "^0.3.0"
   }
 }

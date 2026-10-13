@@ -55,6 +55,7 @@ global.prisma = {
     }
 };
 
+require('./helpers/workflow.cjs').workflowModels(global.prisma);
 const router = require('../routes/cultivationBatchManagement');
 const app = express();
 app.use(express.json());

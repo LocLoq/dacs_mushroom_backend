@@ -50,7 +50,7 @@ upload.single('image'), handle(async (req, res) => {
         fields(req.body || {}, [], { allowEmpty: true });
 
         const lookup = await prisma.classifierLookup.create({
-            data: { userId: req.user?.id || null, originalName: req.file.originalname, mimeType: req.file.mimetype, fileSize: req.file.size, inputPath: req.file.path }
+            data: { userId: req.user?.id || null, originalName: req.file.originalname, mimeType: req.file.mimetype, fileSize: req.file.size, inputPath: req.file.path, maxAttempts: mushroomClassifierQueue.classifierConfig.attempts }
         });
         res.locals.classifierLookupId = lookup.id;
         // Database ownership survives an enqueue/persistence outage. The monitor cleans it.
@@ -79,6 +79,20 @@ upload.single('image'), handle(async (req, res) => {
         console.error('Error in classifier route:', error);
         fail(503, 'Không thể tiếp nhận yêu cầu phân loại');
     }
+}));
+
+// UUID is the capability used by the existing guest classification workflow.
+router.get('/jobs/:id', handle(async (req, res) => {
+    if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(req.params.id)) fail(400, 'Mã job không hợp lệ');
+    const lookup = await prisma.classifierLookup.findUnique({ where: { id: req.params.id }, select: {
+        id: true, status: true, result: true, attempt: true, maxAttempts: true, nextRetryAt: true, queuedAt: true, startedAt: true, completedAt: true, updatedAt: true
+    } });
+    if (!lookup) fail(404, 'Không tìm thấy job phân loại');
+    // Project explicitly even if a mocked database ignores select.
+    res.json({ data: { id: lookup.id, status: lookup.status, result: lookup.status === 'SUCCEEDED' ? lookup.result : null,
+        attempt: lookup.attempt, maxAttempts: lookup.maxAttempts, nextRetryAt: lookup.nextRetryAt,
+        queuedAt: lookup.queuedAt, startedAt: lookup.startedAt, completedAt: lookup.completedAt, updatedAt: lookup.updatedAt,
+        message: lookup.status === 'FAILED' ? 'Phân loại thất bại' : null } });
 }));
 
 router.get('/history', auditAction('CLASSIFIER_HISTORY_VIEW', { entityType: 'ClassifierLookup' }), authenticateToken, authorizeRoles(...global.privilegedRoles), handle(async (req, res) => {

@@ -1,3 +1,4 @@
+const { workflowTransaction } = require('../services/access');
 const { fail, id: parseId, pagination, pageResponse, fields, textField, dateField, numberField, handle, errorHandler } = require('../services/apiHelpers');
 const express = require('express');
 const crypto = require('crypto');
@@ -9,6 +10,10 @@ const router = express.Router();
 
 const { authenticateToken, authorizeRoles } = require('../middlewares/auth');
 const prisma = global.prisma;
+const { batchScope, requireBatchAccess, batchAccessMiddleware } = require('../services/access');
+const { refreshBatch, refreshUsers } = require('../services/workflowEvents');
+const { notifyUsers, publishNotifications } = require('../services/notifications');
+router.use(require('./staffAssignments').createStaffRouter('batch'));
 const { createGalleryRouter } = require('./gallery');
 const { galleryInclude, withGallery, removeStoredMedia } = require('../services/gallery');
 // Resolve the exact batch code from a QR before opening an authenticated batch.
@@ -16,6 +21,7 @@ router.get(['/by-code', '/by-code/:batchCode'], authenticateToken, authorizeRole
     const batchCode = textField(req.params.batchCode, 'Mã lô', 191);
     const batch = await prisma.cultivationBatch.findUnique({ where: { batchCode }, select: { id: true, batchCode: true } });
     if (!batch) fail(404, 'Không tìm thấy lô nuôi trồng');
+    await requireBatchAccess(prisma, req.user, batch.id);
     res.json({ data: batch });
 }));
 
@@ -71,6 +77,14 @@ const growthProgressUpload = multer({
     }
 });
 
+const careUploadDirectory = path.join(__dirname, '..', 'uploads', 'care-logs');
+fs.mkdirSync(careUploadDirectory, { recursive: true });
+const careUpload = multer({
+    storage: multer.diskStorage({ destination: careUploadDirectory, filename: (req, file, callback) => callback(null, crypto.randomUUID() + growthProgressImageExtensions[file.mimetype]) }),
+    limits: { fileSize: 5 * 1024 * 1024, files: 5, fields: 3 },
+    fileFilter: (req, file, callback) => callback(growthProgressImageExtensions[file.mimetype] ? null : new Error('Chỉ hỗ trợ ảnh JPEG, PNG hoặc WebP'), Boolean(growthProgressImageExtensions[file.mimetype]))
+}).array('images', 5);
+
 const toGrowthProgressImageData = (files = []) => files.map((file) => ({
     imageUrl: `/uploads/growth-progress/${file.filename}`,
     originalName: file.originalname,
@@ -99,6 +113,7 @@ router.get('/', authenticateToken, authorizeRoles(...global.allRoles), handle(as
     if (status !== undefined && !['PREPARATION', 'INCUBATION', 'FRUITING', 'HARVESTING', 'COMPLETED', 'FAILED'].includes(status)) fail(400, 'Trạng thái lô không hợp lệ');
 
     const whereClause = {
+        ...batchScope(req.user),
         ...(search && { batchCode: { contains: search } }),
         ...(facilityId && { facilityId }),
         ...(mushroomId && { mushroomId }),
@@ -126,7 +141,7 @@ router.get('/', authenticateToken, authorizeRoles(...global.allRoles), handle(as
 }));
 
 // 2. GET /:id - Lấy chi tiết 1 lô nuôi trồng
-router.get('/:id', authenticateToken, authorizeRoles(...global.allRoles), handle(async (req, res) => {
+router.get('/:id', authenticateToken, authorizeRoles(...global.allRoles), batchAccessMiddleware, handle(async (req, res) => {
     const id = parseId(req.params.id);
     const batch = await prisma.cultivationBatch.findUnique({
         where: { id },
@@ -151,11 +166,12 @@ router.post('/', authenticateToken, authorizeRoles(...global.privilegedRoles), h
     for (const field of ['facilityId', 'mushroomId', 'startDate']) if (batchData[field] === undefined) fail(400, `${field} là bắt buộc`);
     const newBatch = await createBatchWithCode(prisma, batchData);
 
+    await refreshBatch(newBatch.id);
     res.status(201).json({ message: 'Thêm lô nuôi trồng thành công', data: newBatch });
 }));
 
 // 3a. GET /:id/care-logs - Nhật ký chấm sóc
-router.get('/:id/care-logs', authenticateToken, authorizeRoles(...global.allRoles), handle(async (req, res) => {
+router.get('/:id/care-logs', authenticateToken, authorizeRoles(...global.allRoles), batchAccessMiddleware, handle(async (req, res) => {
     const batchId = parseId(req.params.id);
     const batch = await prisma.cultivationBatch.findUnique({ where: { id: batchId } });
 
@@ -169,34 +185,31 @@ router.get('/:id/care-logs', authenticateToken, authorizeRoles(...global.allRole
     res.json({ data: careLogs });
 }));
 
-router.post('/:id/care-logs', authenticateToken, authorizeRoles(...global.allRoles), handle(async (req, res) => {
-    const batchId = parseId(req.params.id);
-    fields(req.body, ['actionType', 'notes', 'recordedAt']);
-    const { actionType, notes, recordedAt } = req.body;
-
-    const parsedAction = textField(actionType, 'actionType', Infinity);
-    const parsedNotes = textField(notes, 'notes', Infinity);
-    const parsedRecordedAt = recordedAt === undefined ? new Date() : dateField(recordedAt, 'recordedAt');
-
-    const batch = await prisma.cultivationBatch.findUnique({ where: { id: batchId } });
-    if (!batch) fail(404, 'Không tìm thấy lô nuôi trồng');
-
-    const careLog = await prisma.cultivationCareLog.create({
-        data: {
-            batchId,
-            actionType: parsedAction,
-            notes: parsedNotes,
-            createdByUserId: req.user.id,
-            updatedByUserId: req.user.id,
-            recordedAt: parsedRecordedAt
-        }
-    });
-
-    res.status(201).json({ message: 'Ghi nhật ký chấm sóc thành công', data: careLog });
+router.post('/:id/care-logs', authenticateToken, authorizeRoles(...global.allRoles), batchAccessMiddleware, careUpload, handle(async (req, res) => {
+    let committed = false;
+    try {
+        const batchId = parseId(req.params.id);
+        fields(req.body, ['actionType', 'notes', 'recordedAt']);
+        const actionType = textField(req.body.actionType, 'actionType', 255);
+        const notes = textField(req.body.notes, 'notes', Infinity);
+        const recordedAt = req.body.recordedAt === undefined ? new Date() : dateField(req.body.recordedAt, 'recordedAt');
+        const careLog = await workflowTransaction(prisma, async (tx) => {
+            await requireBatchAccess(tx, req.user, batchId, true);
+            return tx.cultivationCareLog.create({ data: { batchId, actionType, notes, recordedAt, createdByUserId: req.user.id, updatedByUserId: req.user.id,
+                images: { create: (req.files || []).map((file) => ({ imageUrl: '/uploads/care-logs/' + file.filename, originalName: file.originalname, mimeType: file.mimetype, fileSize: file.size })) }
+            }, include: { images: true } });
+        });
+        committed = true;
+        await refreshBatch(batchId, 'care-logs');
+        res.status(201).json({ message: 'Ghi nhật ký chăm sóc thành công', data: careLog });
+    } catch (error) {
+        if (!committed) await removeGrowthProgressUploadFiles(req.files || []);
+        throw error;
+    }
 }));
 
 // Growth-progress handlers keep upload cleanup inside the shared error boundary.
-router.get('/:id/growth-progress', authenticateToken, authorizeRoles(...global.allRoles), handle(async (req, res) => {
+router.get('/:id/growth-progress', authenticateToken, authorizeRoles(...global.allRoles), batchAccessMiddleware, handle(async (req, res) => {
     const batchId = parseId(req.params.id);
     const batch = await prisma.cultivationBatch.findUnique({ where: { id: batchId } });
     if (!batch) fail(404, 'Không tìm thấy lô nuôi trồng');
@@ -206,7 +219,7 @@ router.get('/:id/growth-progress', authenticateToken, authorizeRoles(...global.a
     res.json({ data: growthRecords });
 }));
 
-router.post('/:id/growth-progress', authenticateToken, authorizeRoles(...global.allRoles), growthProgressUpload.array('images', 5), handle(async (req, res) => {
+router.post('/:id/growth-progress', authenticateToken, authorizeRoles(...global.allRoles), batchAccessMiddleware, growthProgressUpload.array('images', 5), handle(async (req, res) => {
     let committed = false;
     try {
         const uploadedFiles = req.files || [];
@@ -217,15 +230,19 @@ router.post('/:id/growth-progress', authenticateToken, authorizeRoles(...global.
         const recordedAt = req.body.recordedAt === undefined ? new Date() : dateField(req.body.recordedAt, 'recordedAt');
         const batch = await prisma.cultivationBatch.findUnique({ where: { id: batchId } });
         if (!batch) fail(404, 'Không tìm thấy lô nuôi trồng');
-        const record = await prisma.growthProgressRecord.create({
+        const record = await workflowTransaction(prisma, async (tx) => {
+            await requireBatchAccess(tx, req.user, batchId, true);
+            return tx.growthProgressRecord.create({
             data: {
                 batchId, stage, notes, recordedAt,
                 createdByUserId: req.user.id, updatedByUserId: req.user.id,
                 ...(uploadedFiles.length > 0 && { images: { create: toGrowthProgressImageData(uploadedFiles) } })
             },
             include: { images: true }
+            });
         });
         committed = true;
+        await refreshBatch(batchId, 'growth-progress');
         res.status(201).json({ message: 'Cập nhật quá trình sinh trưởng thành công', data: record });
     } catch (error) {
         if (!committed) await removeGrowthProgressUploadFiles(req.files || []);
@@ -233,7 +250,7 @@ router.post('/:id/growth-progress', authenticateToken, authorizeRoles(...global.
     }
 }));
 
-router.patch('/:id/growth-progress/:recordId', authenticateToken, authorizeRoles(...global.allRoles), growthProgressUpload.array('images', 5), handle(async (req, res) => {
+router.patch('/:id/growth-progress/:recordId', authenticateToken, authorizeRoles(...global.allRoles), batchAccessMiddleware, growthProgressUpload.array('images', 5), handle(async (req, res) => {
     let committed = false;
     try {
         const uploadedFiles = req.files || [];
@@ -246,13 +263,16 @@ router.patch('/:id/growth-progress/:recordId', authenticateToken, authorizeRoles
         if (Object.hasOwn(requestData, 'recordedAt')) updateData.recordedAt = dateField(requestData.recordedAt, 'recordedAt');
         const batch = await prisma.cultivationBatch.findUnique({ where: { id: batchId } });
         if (!batch) fail(404, 'Không tìm thấy lô nuôi trồng');
-        const existingRecord = await prisma.growthProgressRecord.findFirst({ where: { id: recordId, batchId } });
-        if (!existingRecord) fail(404, 'Không tìm thấy bản ghi quá trình sinh trưởng');
-        if (uploadedFiles.length > 0) updateData.images = { create: toGrowthProgressImageData(uploadedFiles) };
-        const updatedRecord = await prisma.growthProgressRecord.update({
-            where: { id: recordId }, data: updateData, include: { images: true }
+        const updatedRecord = await workflowTransaction(prisma, async (tx) => {
+            await requireBatchAccess(tx, req.user, batchId, true);
+            const existingRecord = await tx.growthProgressRecord.findFirst({ where: { id: recordId, batchId } });
+            if (!existingRecord) fail(404, 'Không tìm thấy bản ghi quá trình sinh trưởng');
+            if (req.user.role === 'staff' && existingRecord.createdByUserId !== req.user.id) fail(403, 'Chỉ được sửa bản ghi do bạn tạo');
+            if (uploadedFiles.length) updateData.images = { create: toGrowthProgressImageData(uploadedFiles) };
+            return tx.growthProgressRecord.update({ where: { id: recordId }, data: updateData, include: { images: true } });
         });
         committed = true;
+        await refreshBatch(batchId, 'growth-progress');
         res.json({ message: 'Cập nhật quá trình sinh trưởng thành công', data: updatedRecord });
     } catch (error) {
         if (!committed) await removeGrowthProgressUploadFiles(req.files || []);
@@ -261,7 +281,7 @@ router.patch('/:id/growth-progress/:recordId', authenticateToken, authorizeRoles
 }));
 
 // 3c. GET /:id/harvests - Nhật ký thu hoạch
-router.get('/:id/harvests', authenticateToken, authorizeRoles(...global.allRoles), handle(async (req, res) => {
+router.get('/:id/harvests', authenticateToken, authorizeRoles(...global.allRoles), batchAccessMiddleware, handle(async (req, res) => {
     const batchId = parseId(req.params.id);
     const batch = await prisma.cultivationBatch.findUnique({ where: { id: batchId } });
 
@@ -275,7 +295,7 @@ router.get('/:id/harvests', authenticateToken, authorizeRoles(...global.allRoles
     res.json({ data: harvests });
 }));
 
-router.post('/:id/harvests', authenticateToken, authorizeRoles(...global.allRoles), handle(async (req, res) => {
+router.post('/:id/harvests', authenticateToken, authorizeRoles(...global.allRoles), batchAccessMiddleware, handle(async (req, res) => {
     const batchId = parseId(req.params.id);
     fields(req.body, ['totalYieldKg', 'qualityGrade', 'notes', 'harvestedAt', 'finalizeBatch']);
     const { totalYieldKg, qualityGrade, notes, harvestedAt, finalizeBatch } = req.body;
@@ -289,7 +309,8 @@ router.post('/:id/harvests', authenticateToken, authorizeRoles(...global.allRole
     const batch = await prisma.cultivationBatch.findUnique({ where: { id: batchId } });
     if (!batch) fail(404, 'Không tìm thấy lô nuôi trồng');
 
-    const harvest = await prisma.$transaction(async (tx) => {
+    const harvest = await workflowTransaction(prisma, async (tx) => {
+        await requireBatchAccess(tx, req.user, batchId, true);
         const locked = await tx.cultivationBatch.updateMany({ where: { id: batchId }, data: { updatedAt: new Date() } });
         if (!locked.count) return null;
         const created = await tx.harvestRecord.create({
@@ -321,13 +342,16 @@ router.post('/:id/harvests', authenticateToken, authorizeRoles(...global.allRole
 
     if (!harvest) fail(404, 'Không tìm thấy lô nuôi trồng');
 
+    await refreshBatch(batchId, 'harvests');
+    await refreshBatch(batchId);
     res.status(201).json({ message: 'Ghi nhận kết quả thu hoạch thành công', data: harvest });
 }));
 
 // 4. PUT /:id - Cập nhật thông tin lô nuôi trồng
-router.put('/:id', authenticateToken, authorizeRoles(...global.allRoles), handle(async (req, res) => {
+router.put('/:id', authenticateToken, authorizeRoles(...global.allRoles), batchAccessMiddleware, handle(async (req, res) => {
     const id = parseId(req.params.id);
     const batchData = req.body;
+    if (req.user.role === 'staff') fields(batchData, ['status']);
     validateBatchData(batchData);
 
     if (batchData.batchCode !== undefined) {
@@ -336,11 +360,20 @@ router.put('/:id', authenticateToken, authorizeRoles(...global.allRoles), handle
         if (batchData.batchCode !== existing.batchCode) fail(400, 'Không được thay đổi mã lô');
         delete batchData.batchCode;
     }
-    const updatedBatch = await prisma.cultivationBatch.update({
-        where: { id },
-        data: batchData,
-        include: { facility: true, mushroom: true }
+    const { updatedBatch, revoked, notifications } = await workflowTransaction(prisma, async (tx) => {
+        const existing = await requireBatchAccess(tx, req.user, id, true);
+        const revoked = batchData.facilityId !== undefined && batchData.facilityId !== existing.facilityId
+            ? await tx.batchStaff.findMany({ where: { batchId: id } }) : [];
+        if (revoked.length) await tx.batchStaff.deleteMany({ where: { batchId: id } });
+        const updatedBatch = await tx.cultivationBatch.update({ where: { id }, data: batchData, include: { facility: true, mushroom: true } });
+        const notifications = revoked.length ? await notifyUsers(tx, { recipients: revoked.map((row) => row.userId), actorId: req.user.id,
+            eventKey: crypto.randomUUID(), type: 'PERMISSION_REVOKED', title: 'Quyền lô đã được thu hồi do thay đổi cơ sở', batchId: id }) : [];
+        return { updatedBatch, revoked, notifications };
     });
+    await publishNotifications(notifications);
+    await refreshUsers(revoked.map((row) => row.userId), 'permissions');
+    await refreshUsers(revoked.map((row) => row.userId), 'tasks');
+    await refreshBatch(id);
 
     res.json({ message: 'Cập nhật lô nuôi trồng thành công', data: updatedBatch });
 }));
@@ -348,11 +381,18 @@ router.put('/:id', authenticateToken, authorizeRoles(...global.allRoles), handle
 // 5. DELETE /:id - Xóa lô nuôi trồng
 router.delete('/:id', authenticateToken, authorizeRoles(...global.privilegedRoles), handle(async (req, res) => {
     const id = parseId(req.params.id);
-    const deleted = await prisma.cultivationBatch.delete({
-        where: { id },
-        include: { images: true, growthRecords: { include: { images: true } } }
+    const { deleted, revoked, notifications } = await workflowTransaction(prisma, async (tx) => {
+        await requireBatchAccess(tx, req.user, id, true);
+        const revoked = await tx.batchStaff.findMany({ where: { batchId: id } });
+        const deleted = await tx.cultivationBatch.delete({ where: { id }, include: { images: true, growthRecords: { include: { images: true } }, careLogs: { include: { images: true } } } });
+        const notifications = await notifyUsers(tx, { recipients: revoked.map((row) => row.userId), actorId: req.user.id, eventKey: crypto.randomUUID(), type: 'PERMISSION_REVOKED', title: 'Lô nuôi trồng đã được xóa', batchId: id });
+        return { deleted, revoked, notifications };
     });
-    await removeStoredMedia(prisma, [...(deleted.images || []), ...(deleted.growthRecords || []).flatMap((record) => record.images)]);
+    await publishNotifications(notifications);
+    await refreshUsers(revoked.map((row) => row.userId), 'permissions');
+    await refreshUsers(revoked.map((row) => row.userId), 'tasks');
+    await refreshBatch(id);
+    await removeStoredMedia(prisma, [...(deleted.images || []), ...(deleted.growthRecords || []).flatMap((record) => record.images), ...(deleted.careLogs || []).flatMap((record) => record.images)]);
     res.json({ message: 'Xóa lô nuôi trồng thành công' });
 }));
 

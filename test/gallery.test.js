@@ -65,6 +65,7 @@ for (const [, parentModel, imageModel, parentField] of resources) {
         }
     };
 }
+require('./helpers/workflow.cjs').workflowModels(global.prisma);
 const app = express();
 app.use(express.json());
 const { createGalleryRouter } = require('../routes/gallery');

@@ -4,56 +4,41 @@ const fs = require('fs');
 const axios = require('axios');
 
 async function runTest() {
-    console.log('Connecting to socket server...');
-    const socket = io('http://localhost:8080');
-
-    socket.on('connect', () => {
-        console.log('Socket connected:', socket.id);
-    });
-
-    socket.on('processing', (data) => {
-        console.log('Received message from server [PROCESSING]:', data);
-    });
-
-    socket.on('finished', (data) => {
-        console.log('Received message from server [FINISHED]:', data);
-        console.log('Test completed successfully. Disconnecting...');
-        socket.disconnect();
-        process.exit(0);
-    });
-
-    socket.on('failed', (data) => {
-        console.error('Received classifier failure:', data);
-        socket.disconnect();
-        process.exit(1);
-    });
-
-    // Create a dummy image file for testing
-    fs.writeFileSync('dummy.jpg', 'fake image content');
-
-    const form = new FormData();
-    form.append('image', fs.createReadStream('dummy.jpg'));
-
-    console.log('Sending POST request to /api/mushroom-classifier/classify...');
-    
+    const baseUrl = process.env.API_BASE_URL || 'http://localhost:8080';
+    const imagePath = process.argv[2] || 'dummy.jpg';
+    if (!fs.existsSync(imagePath)) throw new Error('Usage: node test-client.js <image-path>');
+    const socket = io(baseUrl, { transports: ['websocket'] });
+    let jobId, reading = false, dirty = false, finished = false;
+    let pollTimer;
+    const close = (failed) => {
+        finished = true; clearInterval(pollTimer); socket.disconnect();
+        process.exitCode = failed ? 1 : 0;
+    };
+    const refresh = async () => {
+        if (!jobId || finished) return;
+        if (reading) { dirty = true; return; }
+        reading = true;
+        try {
+            do {
+                dirty = false;
+                const response = await axios.get(baseUrl + '/api/mushroom-classifier/jobs/' + jobId);
+                const snapshot = response.data.data;
+                console.log('API snapshot:', snapshot);
+                if (snapshot.status === 'SUCCEEDED' || snapshot.status === 'FAILED') close(snapshot.status === 'FAILED');
+            } while (dirty && !finished);
+        } catch (error) { console.error('Unable to refresh job:', error.response?.status || error.message); }
+        finally { reading = false; }
+    };
+    socket.on('connect', () => { if (jobId) { socket.emit('subscribe_job', jobId); void refresh(); } });
+    socket.on('refresh', (message) => { if (message?.resource === 'classifier-job' && message.id === jobId) void refresh(); });
+    pollTimer = setInterval(() => { if (!socket.connected) void refresh(); }, 5000);
     try {
-        const response = await axios.post('http://localhost:8080/api/mushroom-classifier/classify', form, {
-            headers: form.getHeaders()
-        });
-        
-        console.log('POST Response:', response.data);
-        
-        if (response.data.jobId) {
-            console.log(`Subscribing to job_${response.data.jobId}...`);
-            socket.emit('subscribe_job', response.data.jobId);
-        } else {
-            console.error('No jobId received!');
-            process.exit(1);
-        }
-    } catch (err) {
-        console.error('Error during POST request:', err.response ? err.response.data : err.message);
-        process.exit(1);
-    }
+        const form = new FormData(); form.append('image', fs.createReadStream(imagePath));
+        const response = await axios.post(baseUrl + '/api/mushroom-classifier/classify', form, { headers: form.getHeaders() });
+        jobId = response.data.jobId;
+        if (!jobId) throw new Error('Server did not return a job ID');
+        if (socket.connected) socket.emit('subscribe_job', jobId);
+        await refresh();
+    } catch (error) { close(true); throw error; }
 }
-
-runTest();
+runTest().catch((error) => { console.error(error.response?.data || error.message); process.exitCode = 1; });

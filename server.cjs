@@ -29,7 +29,7 @@ configureTrustProxy(app);
 const port = process.env.PORT || 8080;
 const corsOrigins = (process.env.CORS_ALLOWED_ORIGINS || '').split(',').map((item) => item.trim()).filter(Boolean);
 const corsOrigin = corsOrigins.length ? corsOrigins : '*';
-const corsOptions = { origin: corsOrigin, allowedHeaders: ['Authorization', 'Content-Type'],
+const corsOptions = { origin: corsOrigin, allowedHeaders: ['Authorization', 'Content-Type', 'Accept', 'X-Tunnel-Skip-AntiPhishing-Page'],
   exposedHeaders: ['Content-Disposition', 'RateLimit', 'RateLimit-Policy', 'Retry-After'] };
 
 const server = http.createServer(app);
@@ -54,6 +54,7 @@ app.use('/uploads', galleryMediaAccess, express.static(path.join(__dirname, 'upl
 // api
 app.use('/api', require('./routes/test'));
 app.use('/api', require('./routes/login'));
+app.use('/api/notifications', require('./routes/notifications'));
 app.use('/api/dashboard', require('./routes/dashboard'));
 app.use('/api/mushroom-classifier', require('./routes/mushroomClassifier'));
 app.use('/api/mushroom-species', require('./routes/mushroomSpeciesManagement'));
@@ -77,6 +78,9 @@ const classifierMonitor = createClassifierMonitor({ prisma, queue: classifierQue
 classifierMonitor.start(classifierWorker);
 void cleanStaleClassifierFiles(prisma);
 
+require('./services/workflowEvents').configureWorkflowSocket(io);
+const notificationWorker = require('./queues/notificationQueue').startNotificationWorker(prisma);
+
 // basic socket event
 io.on('connection', (socket) => {
   console.log('A client connected');
@@ -89,13 +93,7 @@ io.on('connection', (socket) => {
     try {
       const lookup = await prisma.classifierLookup.findUnique({ where: { id: jobId } });
       if (!lookup) return;
-      if (lookup.status === 'SUCCEEDED') {
-        socket.emit('finished', { jobId, status: lookup.status, result: lookup.result });
-      } else if (lookup.status === 'FAILED') {
-        socket.emit('failed', { jobId, status: lookup.status, message: 'Phân loại thất bại' });
-      } else {
-        socket.emit('processing', { jobId, status: lookup.status, message: 'Yêu cầu đang được xử lý' });
-      }
+      socket.emit('refresh', { resource: 'classifier-job', id: jobId });
     } catch (error) {
       console.error('Unable to replay classifier status:', error.message);
     }
@@ -107,7 +105,8 @@ io.on('connection', (socket) => {
 });
 
 
-server.listen(port, () => {
+const listenHost = process.env.API_LISTEN_HOST || (process.env.PUSH_HOST_MODE === 'tunnel' ? '127.0.0.1' : '0.0.0.0');
+server.listen(port, listenHost, () => {
   console.log(`Server listening at http://localhost:${port}`);
 });
 
@@ -119,7 +118,7 @@ async function shutdown() {
   try {
     await withDeadline(async () => {
       await classifierMonitor.stop(classifierWorker);
-      await Promise.all([classifierWorker.close(), classifierQueue.close(), new Promise((resolve) => io.close(resolve))]);
+      await Promise.all([classifierWorker.close(), classifierQueue.close(), notificationWorker.close(), new Promise((resolve) => io.close(resolve))]);
       await prisma.$disconnect();
     }, 10000, new Error('Backend shutdown timed out'));
   } catch (error) { console.error(error.message); }

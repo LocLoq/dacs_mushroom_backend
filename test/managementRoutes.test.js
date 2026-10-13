@@ -21,6 +21,7 @@ global.prisma = {
     }
 };
 
+require('./helpers/workflow.cjs').workflowModels(global.prisma);
 const app = express(); app.use(express.json());
 app.use('/api', require('../routes/login'));
 app.use('/api/admin', require('../routes/admin'));

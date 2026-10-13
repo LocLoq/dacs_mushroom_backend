@@ -20,3 +20,6 @@ backups
 *.tar
 *.tar.gz
 coverage
+
+secrets
+*.p8

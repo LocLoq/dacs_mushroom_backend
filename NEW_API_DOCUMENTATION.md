@@ -407,3 +407,8 @@ Backend cho phép headers `Authorization`, `Content-Type`, và expose `Content-D
 GET /api/cultivation-batches/by-code/{batchCode} yêu cầu Bearer token của admin/manager/staff. Mã được trim, dài 1–191 ký tự. Response 200: { data: { id, batchCode } }; invalid trả 400, không tồn tại trả 404. QR chứa batchCode thuần. Khách dùng API public theo mã hiện có; nhân viên resolve ID rồi mở chức năng ghi sinh trưởng/chăm sóc/thu hoạch. Quét không tự ghi dữ liệu.
 
 Lệnh node scripts/publish-mushroom-gallery.cjs chỉ dùng thủ công để công khai các ảnh giống nấm hiện có. Không chạy tự động khi khởi động/seed vì có thể công khai lại ảnh đã được chuyển riêng tư.
+
+
+## Công việc cá nhân, phân quyền lô và thông báo
+
+Xem [STAFF_WORKFLOW.md](STAFF_WORKFLOW.md) để nâng cấp database, tích hợp ảnh chăm sóc, API thông báo, giao thức refresh và cấu hình push Android/iOS.

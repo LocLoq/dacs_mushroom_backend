@@ -1,9 +1,15 @@
+const crypto = require('crypto');
+const { workflowTransaction, lockFacility } = require('../services/access');
+const { notifyUsers, publishNotifications } = require('../services/notifications');
+const { refreshUsers } = require('../services/workflowEvents');
 const { fail, id: parseId, pagination, pageResponse, fields, textField, numberField, handle } = require('../services/apiHelpers');
 const express = require('express');
 const router = express.Router();
 
 const { authenticateToken, authorizeRoles } = require('../middlewares/auth');
 const prisma = global.prisma;
+const { facilityScope, requireFacilityAccess } = require('../services/access');
+router.use(require('./staffAssignments').createStaffRouter('facility'));
 const { createGalleryRouter } = require('./gallery');
 const { galleryInclude, withGallery, removeStoredMedia } = require('../services/gallery');
 router.use(createGalleryRouter('productionFacility', 'facilityImage', 'facilityId'));
@@ -35,14 +41,14 @@ router.get('/', authenticateToken, authorizeRoles(...allRoles), handle(async (re
     const { limit, skip } = paging;
     const search = req.query.search === undefined ? '' : textField(req.query.search, 'search', Infinity, true);
 
-    const whereClause = search ? {
+    const whereClause = { ...facilityScope(req.user), ...(search ? {
         OR: [
             { name: { contains: search } },
             { taxCode: { contains: search } },
             { address: { contains: search } },
             { province: { contains: search } }
         ]
-    } : {};
+    } : {}) };
 
     const totalItems = await prisma.productionFacility.count({ where: whereClause });
     const facilities = await prisma.productionFacility.findMany({
@@ -68,6 +74,7 @@ router.get('/', authenticateToken, authorizeRoles(...allRoles), handle(async (re
 // 2. GET /:id - Lấy chi tiết 1 cơ sở sản xuất
 router.get('/:id', authenticateToken, authorizeRoles(...allRoles), handle(async (req, res) => {
     const id = parseId(req.params.id);
+    await requireFacilityAccess(prisma, req.user, id);
     const facility = await prisma.productionFacility.findUnique({
         where: { id },
         include: { mushrooms: true, ...galleryInclude }
@@ -129,9 +136,16 @@ router.put('/:id', authenticateToken, authorizeRoles(...managerAndAdmin), handle
 // 5. DELETE /:id - Xóa cơ sở sản xuất
 router.delete('/:id', authenticateToken, authorizeRoles(...managerAndAdmin), handle(async (req, res) => {
     const id = parseId(req.params.id);
-    const deleted = await prisma.productionFacility.delete({
-        where: { id }, include: { images: true }
+    const { deleted, removed, notifications } = await workflowTransaction(prisma, async (tx) => {
+        await requireFacilityAccess(tx, req.user, id);
+        await lockFacility(tx, id);
+        const removed = await tx.facilityStaff.findMany({ where: { facilityId: id } });
+        const deleted = await tx.productionFacility.delete({ where: { id }, include: { images: true } });
+        const notifications = await notifyUsers(tx, { recipients: removed.map((row) => row.userId), actorId: req.user.id, eventKey: crypto.randomUUID(), type: 'PERMISSION_REVOKED', title: 'Cơ sở sản xuất đã được xóa' });
+        return { deleted, removed, notifications };
     });
+    await publishNotifications(notifications);
+    await refreshUsers(removed.map((row) => row.userId), 'permissions');
     await removeStoredMedia(prisma, deleted.images || []);
     res.json({ message: 'Xóa cơ sở sản xuất thành công' });
 }));

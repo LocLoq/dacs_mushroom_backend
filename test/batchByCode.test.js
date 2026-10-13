@@ -11,10 +11,11 @@ const rows = [{ id: 66, batchCode: code }, { id: 67, batchCode: 'LO-001' }, { id
 global.prisma = {
   user: { findUnique: async ({ where }) => ({ id: where.id, username: global.allRoles[where.id - 1], tokenver: 0, role: { name: global.allRoles[where.id - 1] } }) },
   cultivationBatch: { findUnique: async ({ where, select }) => {
-    assert.deepEqual(select, { id: true, batchCode: true });
-    return rows.find((row) => row.batchCode === where.batchCode) || null;
+    if (where.batchCode) assert.deepEqual(select, { id: true, batchCode: true });
+    return rows.find((row) => where.batchCode ? row.batchCode === where.batchCode : row.id === where.id) || null;
   } }
 };
+require('./helpers/workflow.cjs').workflowModels(global.prisma);
 const app = express();
 app.use('/api/cultivation-batches', require('../routes/cultivationBatchManagement'));
 let server;

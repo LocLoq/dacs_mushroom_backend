@@ -17,6 +17,7 @@ let prisma;
 let server;
 let baseUrl;
 let manager;
+let admin;
 let staff;
 let other;
 let batch;
@@ -50,7 +51,7 @@ before(async () => {
     assert.match(database, /^dacs_feature_test_[a-f0-9]{16}$/);
     await connection.query(`CREATE DATABASE \`${database}\` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci`);
     await connection.query(`USE \`${database}\``);
-    for (const filename of ['test/fixtures/pre_workflow_schema.sql', 'sql/workflow_finance_gallery.sql', 'sql/gallery_visibility.sql', 'sql/classifier_resilience.sql', 'sql/account_password_batch_codes.sql']) {
+    for (const filename of ['test/fixtures/pre_workflow_schema.sql', 'sql/workflow_finance_gallery.sql', 'sql/gallery_visibility.sql', 'sql/classifier_resilience.sql', 'sql/account_password_batch_codes.sql', 'sql/staff_care_notifications.sql', 'sql/unifiedpush_apns.sql']) {
         if (filename === 'sql/account_password_batch_codes.sql') await connection.query("INSERT INTO cultivation_batches (batch_code,facility_id,mushroom_id,start_date,updated_at) VALUES ('LO-CS12-2026-099',1,1,NOW(3),NOW(3))");
         const statements = fs.readFileSync(path.join(__dirname, '..', filename), 'utf8').split(';').map((statement) => statement.trim()).filter(Boolean);
         for (const statement of statements) await connection.query(statement);
@@ -62,6 +63,20 @@ before(async () => {
             await connection.query("INSERT INTO cultivation_batches (batch_code,facility_id,mushroom_id,start_date,updated_at) VALUES ('LEGACY',1,1,NOW(3),NOW(3))");
             await connection.query("INSERT INTO tasks (id,title,status,batch_id,updated_at) VALUES ('legacy-task','Already complete','COMPLETED',1,NOW(3))");
             await connection.query("INSERT INTO growth_progress_records (batch_id,stage,notes) VALUES (1,'FRUITING','Legacy note')");
+        }
+        if (filename === 'sql/staff_care_notifications.sql') {
+            await connection.query("INSERT INTO notifications (id,user_id,event_key,type,title) VALUES ('legacy-notice',1,'migration-history','TASK_UPDATED','Legacy')");
+            await connection.query("INSERT INTO push_devices (id,user_id,token,platform,updated_at) VALUES ('legacy-device',1,'old-registration','android',NOW(3))");
+            await connection.query("INSERT INTO push_deliveries (id,notification_id,device_id,sent_at) VALUES ('legacy-pending','legacy-notice','legacy-device',NULL)");
+            await connection.query("INSERT INTO notifications (id,user_id,event_key,type,title) VALUES ('legacy-sent-notice',1,'migration-sent','TASK_UPDATED','Sent')");
+            await connection.query("INSERT INTO push_deliveries (id,notification_id,device_id,sent_at) VALUES ('legacy-sent','legacy-sent-notice','legacy-device',NOW(3))");
+        }
+        if (filename === 'sql/unifiedpush_apns.sql') {
+            const devices = await connection.query("SELECT active,provider FROM push_devices WHERE id='legacy-device'");
+            assert.equal(devices[0].active, 0); assert.equal(devices[0].provider, 'legacy');
+            const history = await connection.query("SELECT id,sent_at,cancelled_at FROM push_deliveries WHERE device_id='legacy-device' ORDER BY id");
+            assert.equal(history.length, 2); assert.ok(history[0].cancelled_at); assert.equal(history[0].sent_at, null);
+            assert.equal(history[1].cancelled_at, null); assert.ok(history[1].sent_at);
         }
         if (filename === 'sql/workflow_finance_gallery.sql') {
             for (const [table, parentField] of [['facility_images', 'facility_id'], ['mushroom_images', 'mushroom_id'], ['batch_images', 'batch_id']]) {
@@ -76,6 +91,8 @@ before(async () => {
     const managerRole = await prisma.role.create({ data: { name: 'manager' } });
     const staffRole = await prisma.role.create({ data: { name: 'staff' } });
     const userData = (username, role_id) => ({ username, password_hash: 'unused', full_name: username, phone_number: '', email: '', role_id, tokenver: 0 });
+    const adminRole = await prisma.role.create({ data: { name: 'admin' } });
+    admin = await prisma.user.create({ data: userData('admin', adminRole.id) });
     manager = await prisma.user.create({ data: userData('manager', managerRole.id) });
     staff = await prisma.user.create({ data: userData('staff', staffRole.id) });
     other = await prisma.user.create({ data: userData('other', staffRole.id) });
@@ -83,10 +100,16 @@ before(async () => {
     facility = await prisma.productionFacility.create({ data: { name: 'Trại thử', address: 'Đà Lạt', facilityType: 'HOUSEHOLD' } });
     batch = await prisma.cultivationBatch.create({ data: { batchCode: 'TEST-001', facilityId: facility.id, mushroomId: species.id, startDate: new Date('2025-01-01') } });
     secondBatch = await prisma.cultivationBatch.create({ data: { batchCode: 'TEST-002', facilityId: facility.id, mushroomId: species.id, startDate: new Date('2025-01-01') } });
+    for (const member of [staff, other]) {
+        await prisma.facilityStaff.create({ data: { userId: member.id, facilityId: facility.id } });
+        for (const assigned of [batch, secondBatch]) await prisma.batchStaff.create({ data: { userId: member.id, batchId: assigned.id } });
+    }
     const app = express();
     app.use(express.json());
     app.use('/api', require('../routes/login'));
     app.use('/uploads', require('../middlewares/galleryMedia').galleryMediaAccess, express.static(path.join(__dirname, '..', 'uploads')));
+    app.use('/api/admin', require('../routes/admin'));
+    app.use('/api/notifications', require('../routes/notifications'));
     app.use('/api/dashboard', require('../routes/dashboard'));
     app.use('/api/cultivation-batches', require('../routes/cultivationBatchManagement'));
     app.use('/api/mushroom-species', require('../routes/mushroomSpeciesManagement'));
@@ -105,7 +128,7 @@ after(async () => {
         await connection.end();
     }
     for (const url of uploadedUrls) {
-        assert.match(url, /^\/uploads\/(gallery|growth-progress)\/[a-f0-9-]+\.(png|jpg|webp)$/);
+        assert.match(url, /^\/uploads\/(gallery|growth-progress|care-logs)\/[a-f0-9-]+\.(png|jpg|webp)$/);
         await fs.promises.unlink(path.join(__dirname, '..', url.slice(1))).catch((error) => { if (error.code !== 'ENOENT') throw error; });
     }
 });
@@ -129,6 +152,7 @@ test('SQL upgrade matches Prisma schema and preserves existing records', { skip:
 test('QR batch lookup resolves exact codes for staff and refuses guests', { skip: !enabled }, async () => {
     const code = 'LO / Đà Lạt #01?%';
     const record = await prisma.cultivationBatch.create({ data: { batchCode: code, facilityId: facility.id, mushroomId: species.id, startDate: new Date() } });
+    await prisma.batchStaff.create({ data: { batchId: record.id, userId: staff.id } });
     try {
         const resolved = await request(`/cultivation-batches/by-code/${encodeURIComponent(` ${code} `)}`, staff);
         assert.equal(resolved.status, 200);
@@ -175,8 +199,9 @@ test('invalid evidence rolls back state and cannot bypass review', { skip: !enab
     const task = await createTask();
     const wrongActor = await createGrowth(other);
     const wrongBatch = await createGrowth(staff, secondBatch.id);
+    assert.equal((await request(`/cultivation-batches/${batch.id}/growth-progress/${wrongActor.id}`, staff, { notes: 'Cannot claim another author' }, 'PATCH')).status, 403);
     const legacy = await prisma.growthProgressRecord.create({ data: { batchId: batch.id, stage: 'FRUITING', notes: 'Old unknown author' } });
-    for (const evidence of [[], [{ type: 'GROWTH_PROGRESS', recordId: wrongActor.id }], [{ type: 'GROWTH_PROGRESS', recordId: wrongBatch.id }], [{ type: 'GROWTH_PROGRESS', recordId: legacy.id }], [{ type: 'FAKE', recordId: 1 }]]) {
+    for (const evidence of [[], [{ type: 'GROWTH_PROGRESS', recordId: wrongActor.id }], [{ type: 'GROWTH_PROGRESS', recordId: wrongBatch.id }], [{ type: 'GROWTH_PROGRESS', recordId: legacy.id }], [{ type: 'FAKE', recordId: 1 }], [{ type: '__proto__', recordId: 1 }], [{ type: 'constructor', recordId: 1 }]]) {
         assert.equal((await request(`/dashboard/tasks/${task.id}/submissions`, staff, { evidence })).status, 400);
         assert.equal((await prisma.task.findUnique({ where: { id: task.id } })).status, 'TODO');
     }
@@ -320,6 +345,7 @@ test('three galleries manage covers, permissions, files and legacy fallback', { 
 
 test('batch deletion retains submitted evidence photos and removes unused gallery files', { skip: !enabled }, async () => {
     const disposable = await prisma.cultivationBatch.create({ data: { batchCode: 'DELETE-MEDIA', facilityId: facility.id, mushroomId: species.id, startDate: new Date() } });
+    await prisma.batchStaff.create({ data: { batchId: disposable.id, userId: staff.id } });
     const task = await createTask(staff, disposable.id);
     const form = new FormData();
     form.append('stage', 'FRUITING');
@@ -361,7 +387,7 @@ test('concurrent automatic codes are unique, isolated, immutable and never reuse
   const anotherYear = await request('/cultivation-batches', manager, { ...data, startDate: '2032-01-01' }); assert.equal(anotherYear.body.data.batchCode, `LO-CS${facility.id}-2032-001`); ids.push(anotherYear.body.data.id);
   const anotherFacility = await request('/cultivation-batches', manager, { ...data, facilityId: 1 }); assert.equal(anotherFacility.body.data.batchCode, 'LO-CS1-2031-001'); ids.push(anotherFacility.body.data.id);
   const moved = await request(`/cultivation-batches/${ids[0]}`, manager, { facilityId: 1, startDate: '2032-01-01' }, 'PUT'); assert.equal(moved.body.data.batchCode, codes[0]);
-  assert.equal((await request(`/cultivation-batches/by-code/${codes[0]}`, staff)).body.data.id, ids[0]);
+  assert.equal((await request(`/cultivation-batches/by-code/${codes[0]}`, manager)).body.data.id, ids[0]);
   assert.equal((await request('/cultivation-batches', staff, data)).status, 403);
   await prisma.batchCodeCounter.upsert({ where: { facilityId_year: { facilityId: facility.id, year: 2033 } }, create: { facilityId: facility.id, year: 2033, lastNumber: 999 }, update: { lastNumber: 999 } });
   const overflow = await request('/cultivation-batches', manager, { ...data, startDate: '2033-01-01' }); assert.equal(overflow.body.data.batchCode, `LO-CS${facility.id}-2033-1000`); ids.push(overflow.body.data.id);
@@ -379,4 +405,118 @@ test('mandatory password change uses real database updates and revokes the old J
   const fresh = await fetch(`${baseUrl}/auth/me`, { headers: { authorization: `Bearer ${changed.body.token}` } }); assert.equal(fresh.status, 200);
   const stored = await prisma.user.findUnique({ where: { id: user.id } }); assert.equal(stored.tokenver, 1); assert.equal(await require('bcrypt').compare('new-password', stored.password_hash), true);
   await prisma.user.delete({ where: { id: user.id } });
+});
+
+
+test('staff scope, care photos, notification ownership and immediate revocation', { skip: !enabled }, async () => {
+    const facilityRow = await prisma.productionFacility.create({ data: { name: 'Restricted facility', address: 'Test', facilityType: 'HOUSEHOLD' } });
+    const target = await prisma.cultivationBatch.create({ data: { batchCode: 'ACL-CARE-TEST', facilityId: facilityRow.id, mushroomId: species.id, startDate: new Date() } });
+    const staffPath = '/cultivation-batches/' + target.id;
+    const facilityPath = '/production-facilities/' + facilityRow.id;
+    assert.equal((await request(staffPath, staff)).status, 403);
+    assert.equal((await request(staffPath + '/staff', manager, { userId: staff.id })).status, 403);
+    assert.equal((await request(staffPath + '/staff', admin, { userId: staff.id })).status, 400);
+    assert.equal((await request(facilityPath + '/staff', admin, { userId: staff.id })).status, 201);
+    assert.equal((await request(staffPath, staff)).status, 403);
+    assert.equal((await request(staffPath + '/staff', admin, { userId: staff.id })).status, 201);
+    assert.equal((await request(staffPath, staff)).status, 200);
+    assert.equal((await request(staffPath, other)).status, 403);
+    assert.equal((await request(staffPath, staff, { notes: 'No structural edit' }, 'PUT')).status, 400);
+    assert.equal((await request(staffPath, staff, { status: 'FRUITING' }, 'PUT')).status, 200);
+    const longAction = await request(staffPath + '/care-logs', staff, { actionType: 'a'.repeat(255), notes: 'Long custom action' });
+    assert.equal(longAction.status, 201, JSON.stringify(longAction.body));
+    assert.equal((await request(staffPath + '/care-logs', staff, { actionType: 'a'.repeat(256), notes: 'Too long' })).status, 400);
+    const beforeFiles = fs.readdirSync(path.join(__dirname, '..', 'uploads', 'care-logs')).sort();
+    const invalidForm = new FormData(); invalidForm.append('actionType', 'WATERING'); invalidForm.append('notes', 'Invalid type');
+    invalidForm.append('images', new Blob(['not-image'], { type: 'text/plain' }), 'invalid.txt');
+    assert.equal((await request(staffPath + '/care-logs', staff, invalidForm)).status, 400);
+    const rollbackForm = new FormData(); rollbackForm.append('actionType', 'WATERING'); rollbackForm.append('images', new Blob(['image'], { type: 'image/png' }), 'rollback.png');
+    assert.equal((await request(staffPath + '/care-logs', staff, rollbackForm)).status, 400);
+    const excessive = new FormData(); excessive.append('actionType', 'WATERING'); excessive.append('notes', 'Too many');
+    for (let i = 0; i < 6; i++) excessive.append('images', new Blob(['image'], { type: 'image/png' }), 'limit' + i + '.png');
+    assert.equal((await request(staffPath + '/care-logs', staff, excessive)).status, 400);
+    assert.deepEqual(fs.readdirSync(path.join(__dirname, '..', 'uploads', 'care-logs')).sort(), beforeFiles);
+    const work = await createTask(staff, target.id);
+    const foreign = await createTask(other, batch.id);
+    let list = await request('/dashboard/tasks?status=ALL&assigneeUserId=' + other.id, staff);
+    assert.equal(list.status, 200);
+    assert.ok(list.body.data.every((task) => task.assigneeUserId === staff.id));
+    assert.equal((await request('/dashboard/tasks/' + foreign.id, staff)).status, 403);
+    const form = new FormData();
+    form.append('actionType', 'WATERING'); form.append('notes', 'Photo proof');
+    form.append('images', new Blob(['care photo'], { type: 'image/png' }), 'care.png');
+    const care = await request(staffPath + '/care-logs', staff, form);
+    assert.equal(care.status, 201, JSON.stringify(care.body));
+    assert.equal(care.body.data.images.length, 1);
+    const url = care.body.data.images[0].imageUrl; uploadedUrls.add(url);
+    assert.equal((await request(url.replace('/uploads', '/../uploads'), staff)).status, 200);
+    assert.equal((await request(url.replace('/uploads', '/../uploads'), other)).status, 403);
+    assert.equal((await request(url.replace('/uploads', '/../uploads'), null)).status, 404);
+    const submitted = await request('/dashboard/tasks/' + work.id + '/submissions', staff, { evidence: [{ type: 'CARE_LOG', recordId: care.body.data.id }] });
+    assert.equal(submitted.status, 201, JSON.stringify(submitted.body));
+    assert.equal(submitted.body.data.evidence[0].record.images[0].imageUrl, url);
+    assert.equal(await prisma.taskSubmissionImage.count({ where: { imageUrl: url } }), 1);
+    const notice = await prisma.notification.findFirst({ where: { userId: staff.id, taskId: work.id, type: 'TASK_CREATED' } });
+    assert.ok(notice);
+    assert.equal((await request('/notifications/' + notice.id + '/read', other, {}, 'PATCH')).status, 404);
+    assert.equal((await request('/notifications/' + notice.id + '/read', staff, {}, 'PATCH')).status, 200);
+    assert.ok((await prisma.notification.findUnique({ where: { id: notice.id } })).readAt);
+    assert.equal((await request(facilityPath + '/staff/' + staff.id, admin, undefined, 'DELETE')).status, 200);
+    assert.equal(await prisma.batchStaff.count({ where: { userId: staff.id, batchId: target.id } }), 0);
+    assert.equal((await request(staffPath, staff)).status, 403);
+    assert.equal((await request('/dashboard/tasks/' + work.id, staff)).status, 403);
+    list = await request('/dashboard/tasks?status=ALL&batchId=' + target.id, staff);
+    assert.deepEqual(list.body.data, []);
+    assert.equal((await prisma.task.findUnique({ where: { id: work.id } })).status, 'PENDING_REVIEW');
+    assert.equal((await request('/dashboard/tasks/' + work.id, manager, { status: 'CANCELLED' }, 'PATCH')).status, 200);
+    assert.equal((await request(staffPath + '/care-logs', staff, { actionType: 'WATERING', notes: 'Denied after revoke' })).status, 403);
+});
+
+test('push device rebinding cancels history and old unregister cannot remove the new session', { skip: !enabled }, async () => {
+    const deviceToken = 'a'.repeat(64);
+    const body = { token: deviceToken, platform: 'ios', provider: 'apns', apnsEnvironment: 'sandbox' };
+    const first = await request('/notifications/devices', staff, body, 'PUT'); assert.equal(first.status, 200);
+    const device = await prisma.pushDevice.findFirst({ where: { token: deviceToken } });
+    const notice = await prisma.notification.create({ data: { userId: staff.id, eventKey: 'device-test', type: 'TASK_UPDATED', title: 'Device test' } });
+    await prisma.pushDelivery.create({ data: { notificationId: notice.id, deviceId: device.id } });
+    const second = await request('/notifications/devices', other, body, 'PUT'); assert.equal(second.status, 200);
+    assert.notEqual(second.body.data.registrationId, first.body.data.registrationId);
+    assert.equal(await prisma.pushDelivery.count({ where: { deviceId: device.id, cancelledAt: { not: null } } }), 1);
+    await request('/notifications/devices', staff, { token: deviceToken, registrationId: first.body.data.registrationId }, 'DELETE');
+    assert.equal((await prisma.pushDevice.findUnique({ where: { id: device.id } })).active, true);
+    await request('/notifications/devices', other, { token: deviceToken, registrationId: second.body.data.registrationId }, 'DELETE');
+    assert.equal((await prisma.pushDevice.findUnique({ where: { id: device.id } })).active, false);
+    assert.equal(await prisma.pushDelivery.count({ where: { deviceId: device.id } }), 1);
+    assert.equal((await request('/notifications/push-config', staff)).status, 200);
+    assert.equal((await request('/notifications/devices', staff, { token: 'old-fcm-token', platform: 'android' }, 'PUT')).status, 400);
+});
+
+test('multiple push environments stay independent; worker cancellation uses the real registration guard', { skip: !enabled }, async () => {
+    const value = 'b'.repeat(64);
+    const body = { platform: 'ios', provider: 'apns', token: value, apnsEnvironment: 'sandbox' };
+    const one = await request('/notifications/devices', staff, body, 'PUT');
+    assert.equal(one.status, 200);
+    const same = await request('/notifications/devices', staff, body, 'PUT');
+    assert.equal(same.body.data.registrationId, one.body.data.registrationId);
+    const production = await request('/notifications/devices', staff, { ...body, apnsEnvironment: 'production' }, 'PUT');
+    assert.equal(production.status, 200);
+    const devices = await prisma.pushDevice.findMany({ where: { userId: staff.id, active: true, token: value } });
+    assert.equal(devices.length, 2); assert.notEqual(devices[0].identityHash, devices[1].identityHash);
+    const notices = await prisma.$transaction(tx => require('../services/notifications').notifyUsers(tx, { recipients: [staff.id], actorId: manager.id, eventKey: 'multi-device-notice', type: 'TASK_UPDATED', title: 'Generic' }));
+    const deliveries = await prisma.pushDelivery.findMany({ where: { notificationId: notices[0].id, deviceId: { in: devices.map(d => d.id) } }, include: { device: true } });
+    assert.equal(deliveries.length, 2);
+    const sandbox = deliveries.find(d => d.device.apnsEnvironment === 'sandbox');
+    const live = deliveries.find(d => d.device.apnsEnvironment === 'production');
+    const { createPushProcessor } = require('../queues/notificationQueue');
+    await createPushProcessor({ prisma, senders: { apns: async () => {
+        const rebound = await request('/notifications/devices', other, body, 'PUT'); assert.equal(rebound.status, 200);
+        throw { kind: 'invalid' };
+    } } })({ data: { deliveryId: sandbox.id } });
+    const rebound = await prisma.pushDevice.findUnique({ where: { id: sandbox.deviceId } });
+    assert.equal(rebound.active, true); assert.equal(rebound.userId, other.id);
+    let sends = 0;
+    const processor = createPushProcessor({ prisma, senders: { apns: async () => { sends++; } } });
+    await processor({ data: { deliveryId: live.id } }); await processor({ data: { deliveryId: live.id } });
+    assert.equal(sends, 1); assert.ok((await prisma.pushDelivery.findUnique({ where: { id: live.id } })).sentAt);
+    assert.equal((await prisma.pushDevice.findUnique({ where: { id: live.deviceId } })).active, true);
 });

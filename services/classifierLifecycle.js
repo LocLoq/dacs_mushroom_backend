@@ -6,7 +6,7 @@ const classifierUploadDirectory = path.resolve(__dirname, '..', 'uploads', 'clas
 const activeRequests = new Map();
 const sameAttempt = (a, b) => a && b && new Date(a).getTime() === new Date(b).getTime();
 const emitLookupEvent = (lookupId, event, payload) => {
-    try { if (global.io) global.io.to(`job_${lookupId}`).emit(event, payload); }
+    try { if (global.io) global.io.to(`job_${lookupId}`).emit('refresh', { resource: 'classifier-job', id: lookupId }); }
     catch (error) { console.error('Classifier event failed:', { jobId: lookupId, message: error.message }); }
 };
 
@@ -39,7 +39,7 @@ async function failLookup({ prisma = global.prisma, lookup, code, message, where
     audit = writeAuditLog, emit = emitLookupEvent, removeFile = removeInputFile }) {
     const changed = await prisma.classifierLookup.updateMany({
         where: { id: lookup.id, status: lookup.status, startedAt: lookup.startedAt || null, ...where },
-        data: { status: 'FAILED', errorMessage: `[${code}] ${message}`.slice(0, 2000), completedAt: new Date() }
+        data: { status: 'FAILED', nextRetryAt: null, errorMessage: `[${code}] ${message}`.slice(0, 2000), completedAt: new Date() }
     });
     if (!changed.count) return false;
     abortLookup(lookup.id, lookup.startedAt);

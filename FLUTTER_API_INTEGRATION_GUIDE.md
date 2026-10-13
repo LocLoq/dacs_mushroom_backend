@@ -459,27 +459,18 @@ socket.onConnect((_) {
   socket.emit('subscribe_job', jobId);
 });
 
-socket.on('processing', (data) {
-  // status QUEUED hoặc PROCESSING
-});
-
-socket.on('retrying', (data) {
-  // status=QUEUED; hiển thị đang chờ thử lại, không upload ảnh lần nữa.
-  // retryDelayMs cho biết thời gian chờ, attempt/maxAttempts cho biết lượt thử.
-});
-
-socket.on('finished', (data) {
-  // status SUCCEEDED và data['result']
-});
-
-socket.on('failed', (data) {
-  // status FAILED; hiển thị thông báo an toàn
+socket.on('refresh', (message) async {
+  if (message is! Map || message['resource'] != 'classifier-job' || message['id'] != jobId) return;
+  final response = await api.get('/mushroom-classifier/jobs/$jobId', public: true);
+  final snapshot = response['data'];
+  // Chỉ cập nhật UI bằng snapshot API; status QUEUED/PROCESSING/SUCCEEDED/FAILED.
+  // QUEUED có nextRetryAt -> đang chờ retry; không upload lại ảnh.
 });
 
 socket.connect();
 ```
 
-Backend phát lại trạng thái đã lưu khi subscribe, vì vậy luôn subscribe lại sau reconnect. Đóng listener/socket khi dispose màn hình.
+Backend gửi tín hiệu refresh khi subscribe; client lấy snapshot qua API. Luôn subscribe và tải lại API sau reconnect/foreground; khi mất socket polling job đang chờ mỗi 5 giây. BackendQueueService gộp refresh 300 ms và xử lý tín hiệu đến trong lúc API đang chạy. Đóng listener/socket khi dispose.
 
 Admin/manager có thể xem lịch sử:
 
@@ -721,3 +712,8 @@ Quét camera hỗ trợ Android/iOS/Web; desktop nhập thủ công. Web cần H
 - `POST /api/auth/change-password` body `{current_password,new_password}` returns `{message,token,data}`. Preserve password whitespace. Wrong current password is 400; success clears the flag and replaces the JWT (old tokens are revoked).
 - Create batches without `batchCode`. Use the response code `LO-CS{facilityId}-{Vietnam start year}-{sequence}` for display and QR. Sequence is per facility/year, at least three digits and never reused after deletion. PUT keeps the code when moving facility or start date; omit batchCode, or send the exact existing value.
 - Update database with `sql/account_password_batch_codes.sql` and regenerate Prisma before starting the new backend/frontend.
+
+
+## Công việc cá nhân, phân quyền lô và thông báo
+
+Xem [STAFF_WORKFLOW.md](STAFF_WORKFLOW.md) để nâng cấp database, tích hợp ảnh chăm sóc, API thông báo, giao thức refresh và cấu hình push Android/iOS.

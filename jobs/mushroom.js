@@ -21,7 +21,7 @@ function createMushroomClassifierProcessor({ prisma = global.prisma, classify = 
         const startedAt = new Date(Math.max(now(), lookup.startedAt ? new Date(lookup.startedAt).getTime() + 1 : 0));
         const claimed = await prisma.classifierLookup.updateMany({
             where: { id: lookupId, status: lookup.status, startedAt: lookup.startedAt || null, updatedAt: lookup.updatedAt },
-            data: { status: 'PROCESSING', startedAt, errorMessage: null, completedAt: null, inputPath: lookup.inputPath || imagePath }
+            data: { status: 'PROCESSING', startedAt, errorMessage: null, completedAt: null, inputPath: lookup.inputPath || imagePath, attempt: (job.attemptsMade || 0) + 1, maxAttempts: job.opts?.attempts || config.attempts, nextRetryAt: null }
         });
         if (!claimed.count) throw Object.assign(new Error('Classifier claim changed'), { code: 'CLAIM_CHANGED', retryable: true });
         abortLookup(lookupId);
@@ -57,7 +57,7 @@ function createMushroomClassifierProcessor({ prisma = global.prisma, classify = 
                 if (retry) {
                     const changed = await prisma.classifierLookup.updateMany({
                         where: owned,
-                        data: { status: 'QUEUED', errorMessage: `[${code}] ${message}`.slice(0, 2000), completedAt: null }
+                        data: { status: 'QUEUED', nextRetryAt: new Date(now() + retryDelay(attempt, config.backoffMs)), errorMessage: `[${code}] ${message}`.slice(0, 2000), completedAt: null }
                     });
                     if (changed.count) emit(lookupId, 'retrying', { jobId: lookupId, status: 'QUEUED', attempt, maxAttempts,
                         retryDelayMs: retryDelay(attempt, config.backoffMs), message: 'Đang chờ thử lại nhận diện' });

@@ -50,12 +50,12 @@ router.get('/users', authenticateToken, authorizeRoles(...onlyAdmin), handle(asy
     const { limit, skip } = paging;
     const search = req.query.search === undefined ? '' : textField(req.query.search, 'search', Infinity, true);
 
-    const whereClause = search ? {
+    const whereClause = { ...(req.query.role ? { role: { name: textField(req.query.role, 'role', 50) } } : {}), ...(search ? {
         OR: [
             { username: { contains: search } },
             { full_name: { contains: search } }
         ]
-    } : {};
+    } : {}) };
 
     const totalItems = await prisma.user.count({ where: whereClause });
     const users = await prisma.user.findMany({

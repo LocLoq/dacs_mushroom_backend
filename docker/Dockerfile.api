@@ -21,6 +21,7 @@ COPY --chown=node:node queues ./queues
 COPY --chown=node:node jobs ./jobs
 COPY --chown=node:node prisma ./prisma
 COPY --chown=node:node sql ./sql
+COPY --chown=node:node scripts ./scripts
 RUN mkdir -p uploads/growth-progress uploads/classifier \
     && chown -R node:node uploads
 

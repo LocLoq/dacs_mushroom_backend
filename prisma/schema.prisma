@@ -45,6 +45,12 @@ model User {
   facilityImages FacilityImage[]
   mushroomImages MushroomImage[]
   batchImages BatchImage[]
+  facilityMemberships FacilityStaff[] @relation("FacilityMember")
+  grantedFacilityMemberships FacilityStaff[] @relation("FacilityGrantor")
+  batchAssignments BatchStaff[] @relation("BatchMember")
+  grantedBatchAssignments BatchStaff[] @relation("BatchGrantor")
+  notifications Notification[]
+  pushDevices PushDevice[]
 
   @@map("users")
 }
@@ -194,6 +200,7 @@ model ProductionFacility {
   updatedAt          DateTime           @updatedAt @map("updated_at")
   cultivationBatches CultivationBatch[]
   images FacilityImage[]
+  staffMemberships FacilityStaff[]
 
   @@map("production_facilities")
 }
@@ -234,6 +241,7 @@ model CultivationBatch {
   expenses BatchExpense[]
   sales BatchSale[]
   images BatchImage[]
+  staffAssignments BatchStaff[]
 
   @@index([startDate])
   @@index([facilityId, startDate])
@@ -269,7 +277,7 @@ model Task {
 model CultivationCareLog {
   id         Int      @id @default(autoincrement())
   batchId    Int      @map("batch_id")
-  actionType String   @map("action_type")
+  actionType String   @map("action_type") @db.VarChar(255)
   notes      String   @db.Text
   recordedAt DateTime @default(now()) @map("recorded_at")
   createdAt  DateTime @default(now()) @map("created_at")
@@ -279,6 +287,7 @@ model CultivationCareLog {
   updatedBy User? @relation("CareUpdater", fields: [updatedByUserId], references: [id], onDelete: SetNull)
 
   batch CultivationBatch @relation(fields: [batchId], references: [id], onDelete: Cascade)
+  images CareLogImage[]
 
   @@map("cultivation_care_logs")
 }
@@ -479,6 +488,9 @@ model ClassifierLookup {
   fileSize      Int                    @map("file_size")
   inputPath     String?                @map("input_path") @db.VarChar(1024)
   status        ClassifierLookupStatus @default(QUEUED)
+  attempt       Int @default(0)
+  maxAttempts   Int @default(1) @map("max_attempts")
+  nextRetryAt   DateTime? @map("next_retry_at")
   result        Json?
   predictedName String?                @map("predicted_name") @db.VarChar(191)
   edibility     String?                @db.VarChar(100)
@@ -534,4 +546,97 @@ model BatchCodeCounter {
 
   @@id([facilityId, year])
   @@map("batch_code_counters")
+}
+
+model FacilityStaff {
+  facilityId Int @map("facility_id")
+  userId Int @map("user_id")
+  grantedByUserId Int? @map("granted_by_user_id")
+  createdAt DateTime @default(now()) @map("created_at")
+  facility ProductionFacility @relation(fields: [facilityId], references: [id], onDelete: Cascade)
+  user User @relation("FacilityMember", fields: [userId], references: [id], onDelete: Cascade)
+  grantedBy User? @relation("FacilityGrantor", fields: [grantedByUserId], references: [id], onDelete: SetNull)
+  @@id([facilityId, userId])
+  @@index([userId])
+  @@map("facility_staff")
+}
+
+model BatchStaff {
+  batchId Int @map("batch_id")
+  userId Int @map("user_id")
+  grantedByUserId Int? @map("granted_by_user_id")
+  createdAt DateTime @default(now()) @map("created_at")
+  batch CultivationBatch @relation(fields: [batchId], references: [id], onDelete: Cascade)
+  user User @relation("BatchMember", fields: [userId], references: [id], onDelete: Cascade)
+  grantedBy User? @relation("BatchGrantor", fields: [grantedByUserId], references: [id], onDelete: SetNull)
+  @@id([batchId, userId])
+  @@index([userId])
+  @@map("batch_staff")
+}
+
+model CareLogImage {
+  id Int @id @default(autoincrement())
+  careLogId Int @map("care_log_id")
+  imageUrl String @map("image_url") @db.VarChar(255)
+  originalName String @map("original_name") @db.VarChar(255)
+  mimeType String @map("mime_type") @db.VarChar(100)
+  fileSize Int @map("file_size")
+  createdAt DateTime @default(now()) @map("created_at")
+  careLog CultivationCareLog @relation(fields: [careLogId], references: [id], onDelete: Cascade)
+  @@index([careLogId])
+  @@index([imageUrl])
+  @@map("care_log_images")
+}
+
+model Notification {
+  id String @id @default(uuid()) @db.VarChar(36)
+  userId Int @map("user_id")
+  eventKey String @map("event_key") @db.VarChar(191)
+  type String @db.VarChar(50)
+  title String @db.VarChar(255)
+  taskId String? @map("task_id") @db.VarChar(36)
+  batchId Int? @map("batch_id")
+  readAt DateTime? @map("read_at")
+  createdAt DateTime @default(now()) @map("created_at")
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  deliveries PushDelivery[]
+  @@unique([userId, eventKey])
+  @@index([userId, createdAt])
+  @@index([userId, readAt])
+  @@map("notifications")
+}
+
+model PushDevice {
+  id String @id @default(uuid()) @db.VarChar(36)
+  userId Int @map("user_id")
+  token String @db.Text
+  identityHash String @unique @map("identity_hash") @db.Char(64)
+  provider String @default("legacy") @db.VarChar(20)
+  p256dh String? @db.VarChar(100)
+  auth String? @db.VarChar(50)
+  apnsEnvironment String? @map("apns_environment") @db.VarChar(10)
+  active Boolean @default(false)
+  registrationId String @default(uuid()) @map("registration_id") @db.VarChar(36)
+  platform String @db.VarChar(10)
+  updatedAt DateTime @updatedAt @map("updated_at")
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  deliveries PushDelivery[]
+  @@index([userId])
+  @@map("push_devices")
+}
+
+model PushDelivery {
+  id String @id @default(uuid()) @db.VarChar(36)
+  notificationId String @map("notification_id") @db.VarChar(36)
+  deviceId String @map("device_id") @db.VarChar(36)
+  sentAt DateTime? @map("sent_at")
+  cancelledAt DateTime? @map("cancelled_at")
+  attempts Int @default(0)
+  nextAttemptAt DateTime @default(now()) @map("next_attempt_at")
+  lastError String? @map("last_error") @db.VarChar(255)
+  notification Notification @relation(fields: [notificationId], references: [id], onDelete: Cascade)
+  device PushDevice @relation(fields: [deviceId], references: [id], onDelete: Cascade)
+  @@unique([notificationId, deviceId])
+  @@index([sentAt, nextAttemptAt])
+  @@map("push_deliveries")
 }

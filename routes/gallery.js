@@ -4,6 +4,7 @@ const { authenticateToken, optionalAuthenticateToken, authorizeRoles } = require
 const { auditAction } = require('../middlewares/audit');
 const { fail, id, pagination, pageResponse, fields, textField, handle } = require('../services/apiHelpers');
 const { createGalleryUpload, removeUploads, removeStoredMedia, orderBy, publicImageSelect } = require('../services/gallery');
+const { requireBatchAccess, requireFacilityAccess } = require('../services/access');
 
 const createGalleryRouter = (parentModel, imageModel, parentField) => {
     const router = express.Router();
@@ -25,6 +26,12 @@ const createGalleryRouter = (parentModel, imageModel, parentField) => {
     handle(async (req, res) => {
         const parentId = id(req.params.id);
         const paging = pagination(req.query);
+        if (req.user?.role === 'staff') {
+            try {
+                if (parentModel === 'cultivationBatch') await requireBatchAccess(prisma, req.user, parentId);
+                if (parentModel === 'productionFacility') await requireFacilityAccess(prisma, req.user, parentId);
+            } catch (error) { if (error.status !== 403) throw error; req.user = null; }
+        }
         if (!await prisma[parentModel].findUnique({ where: { id: parentId }, select: { id: true } })) fail(404, 'Không tìm thấy đối tượng');
         const where = { [parentField]: parentId, ...(!req.user ? { isPublic: true } : {}) };
         const [total, rows] = await Promise.all([prisma[imageModel].count({ where }), prisma[imageModel].findMany({ where, skip: paging.skip, take: paging.limit, orderBy, ...(!req.user ? { select: publicImageSelect } : {}) })]);

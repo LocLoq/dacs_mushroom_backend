@@ -29,6 +29,7 @@ global.prisma = {
         delete: async ({ where }) => { const index = tasks.findIndex((item) => item.id === where.id); if (index < 0) throw new Error('missing'); return tasks.splice(index, 1)[0]; }
     }
 };
+require('./helpers/workflow.cjs').workflowModels(global.prisma);
 const app = express();
 app.use(express.json());
 app.use('/api', require('../routes/login'));

@@ -9,3 +9,12 @@ __pycache__/
 uploads/
 benchmarks/results/
 .cache/
+
+# Local workflow verification reports
+test-results-workflow.txt
+db-results-workflow.txt
+
+secrets/
+*.p8
+test-results-push.txt
+db-results-push.txt

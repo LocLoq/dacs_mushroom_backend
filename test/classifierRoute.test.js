@@ -164,3 +164,15 @@ test('classifier rate limit returns 429 before uploading or checking dependencie
     assert.equal(health.mock.callCount(), calls);
     assert.equal(creates.length, beforeCreates);
 });
+
+
+test('guest job snapshot projects results without paths, user metadata or internal errors', async () => {
+    const lookup = await store.prisma.classifierLookup.create({ data: { userId: 1, originalName: 'private-name.png', inputPath: 'private-input-path', errorMessage: 'internal credentials should not be returned', attempt: 2, maxAttempts: 3, status: 'SUCCEEDED', result: { name: 'Test mushroom' } } });
+    const response = await fetch(baseUrl + '/api/mushroom-classifier/jobs/' + lookup.id);
+    assert.equal(response.status, 200);
+    const data = (await response.json()).data;
+    assert.equal(data.status, 'SUCCEEDED'); assert.equal(data.result.name, 'Test mushroom'); assert.equal(data.attempt, 2);
+    for (const field of ['inputPath', 'userId', 'originalName', 'errorMessage']) assert.equal(Object.hasOwn(data, field), false);
+    assert.equal((await fetch(baseUrl + '/api/mushroom-classifier/jobs/not-a-uuid')).status, 400);
+    assert.equal((await fetch(baseUrl + '/api/mushroom-classifier/jobs/00000000-0000-4000-8000-000000000000')).status, 404);
+});

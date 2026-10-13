@@ -23,7 +23,7 @@ const removeUploads = async (files = []) => {
 
 const removeStoredMedia = async (prisma, images = []) => {
     for (const image of images) {
-        if (!/^\/uploads\/(?:gallery|growth-progress)\/[\w.-]+$/.test(image.imageUrl)) continue;
+        if (!/^\/uploads\/(?:gallery|growth-progress|care-logs)\/[\w.-]+$/.test(image.imageUrl)) continue;
         try {
             if (await prisma.taskSubmissionImage.count({ where: { imageUrl: image.imageUrl } })) continue;
             await fs.promises.unlink(path.join(__dirname, '..', image.imageUrl.slice(1)));

@@ -75,5 +75,6 @@ module.exports = {
     authenticateToken,
     optionalAuthenticateToken,
     authorizeRoles,
-    resolveRequestUser
+    resolveRequestUser,
+    resolveUser
 };

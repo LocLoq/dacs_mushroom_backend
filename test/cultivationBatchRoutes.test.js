@@ -14,6 +14,7 @@ global.prisma = {
     growthProgressRecord: { findMany: async () => [], create: async ({ data }) => ({ id: 1, ...data }), findFirst: async () => null, update: async () => null },
     $transaction: async (callback) => callback({ batchCodeCounter: { upsert: async () => ({ lastNumber: 1 }) }, harvestRecord: { create: async ({ data }) => ({ id: 3, ...data }), aggregate: async () => ({ _sum: { totalYieldKg: 22.5 } }) }, cultivationBatch: { create: async ({ data }) => ({ ...batch, ...data }), update: async () => batch, updateMany: async () => ({ count: 1 }) } })
 };
+require('./helpers/workflow.cjs').workflowModels(global.prisma);
 const app = express(); app.use(express.json()); app.use('/api/cultivation-batches', require('../routes/cultivationBatchManagement'));
 let server; let baseUrl;
 const token = jwt.sign({ id: 1, username: 'manager', role: 'manager', tokenver: 0 }, process.env.JWT_SECRET);

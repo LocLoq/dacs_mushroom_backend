@@ -374,3 +374,8 @@ Admin có thể gửi Boolean `must_change_password` khi POST/PUT users. Bỏ fi
 POST cultivation-batches không nhận batchCode: server cấp `LO-CS{facilityId}-{year}-{number}`, year từ startDate theo giờ Việt Nam. Bộ đếm riêng theo cơ sở/năm; transaction cấp số và tạo lô, tối đa ba retry khi xung đột. Không dùng lại số đã cấp sau xóa; vượt 999 vẫn tăng. PUT không đổi mã, kể cả đổi cơ sở/ngày bắt đầu; gửi đúng mã hiện tại vẫn được chấp nhận. Mã lô cũ/QR tiếp tục hoạt động.
 
 Kiểm tra `npm test` và `npm run test:db`. Test database tạo schema cũ trong database cô lập, áp dụng migration, kiểm tra dữ liệu cũ/bộ đếm, tạo lô đồng thời và QR sau sửa. Không nâng cấp database ứng dụng.
+
+
+## Công việc cá nhân, phân quyền lô và thông báo
+
+Xem [STAFF_WORKFLOW.md](STAFF_WORKFLOW.md) để nâng cấp database, tích hợp ảnh chăm sóc, API thông báo, giao thức refresh và cấu hình push Android/iOS.
