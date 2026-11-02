@@ -7,6 +7,7 @@ process.env.JWT_SECRET = 'batch-routes-secret';
 global.allRoles = ['admin', 'manager', 'staff']; global.privilegedRoles = ['admin', 'manager'];
 const batch = { id: 1, batchCode: 'DEMO-BATCH-001', status: 'FRUITING', facility: { id: 1, name: 'Trại demo' }, mushroom: { id: 1, commonName: 'Nấm sò' } };
 global.prisma = {
+    productionFacility: { findUnique: async ({ where }) => ({ id: where.id }) },
     user: { findUnique: async () => ({ id: 1, username: 'manager', tokenver: 0, role: { name: 'manager' } }) },
     cultivationBatch: { count: async () => 1, findMany: async () => [batch], findUnique: async () => batch, create: async ({ data }) => ({ ...batch, ...data }), update: async ({ data }) => ({ ...batch, ...data }), delete: async () => batch },
     cultivationCareLog: { findMany: async () => [{ id: 1, batchId: 1 }], create: async ({ data }) => ({ id: 2, ...data }) },

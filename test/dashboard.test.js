@@ -19,7 +19,8 @@ global.prisma = {
         count: async () => users.length,
         findMany: async () => users
     },
-    cultivationBatch: { findUnique: async ({ where }) => where.id === 1 ? { id: 1, batchCode: 'DEMO-001' } : null },
+    facilityStaff: { findMany: async () => [{ facilityId: 1 }], findUnique: async ({ where }) => where.facilityId_userId },
+    cultivationBatch: { findUnique: async ({ where }) => where.id === 1 ? { id: 1, facilityId: 1, batchCode: 'DEMO-001' } : null },
     task: {
         count: async ({ where }) => tasks.filter((task) => !where.status || !where.status.in || where.status.in.includes(task.status)).length,
         findMany: async ({ where }) => tasks.filter((task) => !where.status || !where.status.in || where.status.in.includes(task.status)).map(withRelations),

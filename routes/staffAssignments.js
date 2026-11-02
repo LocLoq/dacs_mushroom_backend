@@ -4,7 +4,7 @@ const crypto = require('crypto');
 const { authenticateToken, authorizeRoles } = require('../middlewares/auth');
 const { auditAction } = require('../middlewares/audit');
 const { fail, id, fields, textField, pagination, pageResponse, handle } = require('../services/apiHelpers');
-const { requireBatchAccess, requireFacilityAccess, lockFacility } = require('../services/access');
+const { requireBatchAccess, requireFacilityAccess } = require('../services/access');
 const { notifyUsers, publishNotifications } = require('../services/notifications');
 const { refreshUsers } = require('../services/workflowEvents');
 
@@ -19,9 +19,7 @@ function createStaffRouter(kind) {
     const parent = async (tx, req, lock = false) => {
         const parentId = id(req.params.id);
         if (batch) return requireBatchAccess(tx, req.user, parentId, lock);
-        const facility = await requireFacilityAccess(tx, req.user, parentId);
-        if (lock) await lockFacility(tx, parentId);
-        return facility;
+        return requireFacilityAccess(tx, req.user, parentId, lock);
     };
     router.get('/:id/staff', ...auth, handle(async (req, res) => {
         const record = await parent(prisma, req);

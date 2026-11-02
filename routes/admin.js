@@ -10,9 +10,8 @@ const { auditAction } = require('../middlewares/audit');
 
 // Quản trị tài khoản chỉ dành cho admin
 const onlyAdmin = ['admin'];
-const managerAndAdmin = ['admin', 'manager'];
 
-router.get('/audit-logs', auditAction('AUDIT_LOG_VIEW', { entityType: 'AuditLog' }), authenticateToken, authorizeRoles(...managerAndAdmin), handle(async (req, res) => {
+router.get('/audit-logs', auditAction('AUDIT_LOG_VIEW', { entityType: 'AuditLog' }), authenticateToken, authorizeRoles(...onlyAdmin), handle(async (req, res) => {
     const paging = pagination(req.query, 100, 20);
     const { limit, skip } = paging;
     const filters = { ...req.query };
@@ -90,7 +89,11 @@ router.get('/roles', authenticateToken, authorizeRoles(...onlyAdmin), handle(asy
 }));
 
 // 3. Tạo User mới
-router.post('/users', authenticateToken, authorizeRoles(...onlyAdmin), handle(async (req, res) => {
+router.post('/users', auditAction('USER_CREATE', {
+    entityType: 'User',
+    entityId: (_, res) => res.locals.createdUserId === undefined ? null : String(res.locals.createdUserId),
+    metadata: req => ({ username: req.body?.username, roleId: req.body?.role_id })
+}), authenticateToken, authorizeRoles(...onlyAdmin), handle(async (req, res) => {
     fields(req.body, ['username', 'password', 'full_name', 'role_id', 'phone_number', 'email', 'must_change_password']);
     const { password, must_change_password = false } = req.body;
     if (typeof must_change_password !== 'boolean') fail(400, 'must_change_password phải là Boolean');
@@ -122,11 +125,14 @@ router.post('/users', authenticateToken, authorizeRoles(...onlyAdmin), handle(as
         select: { id: true, username: true, full_name: true, role_id: true, must_change_password: true }
     });
 
+    res.locals.createdUserId = newUser.id;
     res.status(201).json({ message: 'Tạo tài khoản thành công', data: newUser });
 }));
 
 // 4. Cập nhật User
-router.put('/users/:id', authenticateToken, authorizeRoles(...onlyAdmin), handle(async (req, res) => {
+router.put('/users/:id', auditAction(req => Object.hasOwn(req.body || {}, 'password') ? 'PASSWORD_RESET' : 'USER_UPDATE', {
+    entityType: 'User', entityId: req => req.params.id
+}), authenticateToken, authorizeRoles(...onlyAdmin), handle(async (req, res) => {
     const id = parseId(req.params.id);
     fields(req.body, ['password', 'full_name', 'role_id', 'phone_number', 'email', 'must_change_password']);
     const { password, full_name, role_id, phone_number, email } = req.body;

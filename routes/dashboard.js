@@ -6,7 +6,7 @@ const { authenticateToken, authorizeRoles } = require('../middlewares/auth');
 const { auditAction } = require('../middlewares/audit');
 
 const prisma = global.prisma;
-const { taskScope, requireTaskAccess, requireBatchAccess } = require('../services/access');
+const { taskScope, managedStaffScope, requireTaskAccess, requireBatchAccess, requireManagerAssignee } = require('../services/access');
 const { taskNotifications, publishNotifications } = require('../services/notifications');
 router.use(require('./taskSubmissions'));
 const openStatuses = ['TODO', 'IN_PROGRESS'];
@@ -25,19 +25,21 @@ const serializeTask = (task) => ({
     batch: undefined,
     assignee: task.assignee ? { id: task.assignee.id, username: task.assignee.username, full_name: task.assignee.full_name, role: task.assignee.role.name } : null
 });
-const validateReferences = async (client, batchId, assigneeUserId, allowRevoked = false) => {
+const validateReferences = async (client, actor, batchId, assigneeUserId, allowRevoked = false, assigning = true) => {
     if (batchId !== null && batchId !== undefined) {
-        try { await requireBatchAccess(client, { role: 'admin' }, batchId, true); }
+        try { await requireBatchAccess(client, actor, batchId, true); }
         catch (error) { if (error.status === 404) fail(400, 'Lô nuôi trồng không tồn tại'); throw error; }
     }
     if (assigneeUserId !== null && assigneeUserId !== undefined) {
         const user = await client.user.findUnique({ where: { id: assigneeUserId }, select: { id: true, role: { select: { name: true } } } });
         if (!user || !global.allRoles.includes(user.role?.name)) fail(400, 'Người được giao không tồn tại hoặc không hợp lệ');
+        if (assigning && actor.role === 'manager' && user.role.name !== 'staff') fail(403, 'Manager chỉ được giao việc cho nhân viên', 'AUTH_FORBIDDEN');
         if (batchId != null && user.role.name === 'staff' && !allowRevoked) {
             try { await requireBatchAccess(client, { id: user.id, role: 'staff' }, batchId); }
             catch (error) { if (error.status === 403) fail(400, 'Người nhận chưa được phân công lô hoặc chưa thuộc cơ sở'); throw error; }
         }
     }
+    if (actor.role === 'manager' && batchId == null) await requireManagerAssignee(client, actor, assigneeUserId, true);
 };
 
 router.get('/tasks', authenticateToken, authorizeRoles(...global.allRoles), handle(async (req, res) => {
@@ -74,7 +76,7 @@ router.get('/task-assignees', authenticateToken, authorizeRoles(...managerRoles)
     const batchId = req.query.batchId === undefined ? null : parseId(req.query.batchId);
     const batch = batchId === null ? null : await requireBatchAccess(prisma, req.user, batchId);
     const where = { AND: [
-        { role: { name: { in: global.allRoles } } },
+        req.user.role === 'manager' ? managedStaffScope(req.user) : { role: { name: { in: global.allRoles } } },
         ...(search ? [{ OR: [{ username: { contains: search } }, { full_name: { contains: search } }] }] : []),
         ...(batch ? [{ OR: [{ role: { name: { in: managerRoles } } }, { role: { name: 'staff' }, facilityMemberships: { some: { facilityId: batch.facilityId } }, batchAssignments: { some: { batchId } } }] }] : [])
     ] };
@@ -94,7 +96,7 @@ router.post('/tasks', auditAction('TASK_CREATE', { entityType: 'Task', entityId:
     const parsedTitle = textField(title, 'title', 255);
     const parsedDescription = description === undefined ? null : textField(description, 'description', Infinity, true);
     const { task, notifications } = await workflowTransaction(prisma, async (tx) => {
-        await validateReferences(tx, batchId, assigneeUserId);
+        await validateReferences(tx, req.user, batchId, assigneeUserId);
         const task = await tx.task.create({ data: { title: parsedTitle, description: parsedDescription, batchId, assigneeUserId, dueAt, createdByUserId: req.user.id }, include: taskInclude });
         return { task, notifications: await taskNotifications(tx, task, req.user.id, 'TASK_CREATED') };
     });
@@ -122,7 +124,8 @@ router.patch('/tasks/:id', auditAction('TASK_UPDATE', { entityType: 'Task', enti
         if ('status' in body) { if (!statuses.has(body.status)) fail(400, 'Trạng thái công việc không hợp lệ'); update.status = body.status; }
         const { updated, notifications } = await workflowTransaction(prisma, async (tx) => {
             await requireTaskAccess(tx, req.user, task, true);
-            await validateReferences(tx, Object.hasOwn(update, 'batchId') ? update.batchId : task.batchId, Object.hasOwn(update, 'assigneeUserId') ? update.assigneeUserId : task.assigneeUserId, body.status === 'CANCELLED');
+            const assigning = Object.hasOwn(update, 'batchId') || Object.hasOwn(update, 'assigneeUserId');
+            await validateReferences(tx, req.user, Object.hasOwn(update, 'batchId') ? update.batchId : task.batchId, Object.hasOwn(update, 'assigneeUserId') ? update.assigneeUserId : task.assigneeUserId, body.status === 'CANCELLED' && !assigning, assigning);
             const result = await tx.task.update({ where: { id: task.id, version: task.version }, data: { ...update, version: { increment: 1 } }, include: taskInclude });
             if (task.status === 'PENDING_REVIEW' && body.status === 'CANCELLED') {
                 await tx.taskSubmission.updateMany({ where: { taskId: task.id, status: 'PENDING' }, data: { status: 'CANCELLED' } });
@@ -143,7 +146,8 @@ router.delete('/tasks/:id', auditAction('TASK_DELETE', { entityType: 'Task', ent
         const { task, notifications } = await workflowTransaction(prisma, async (tx) => {
             const task = await tx.task.findUnique({ where: { id: req.params.id } });
             if (!task) fail(404, 'Không tìm thấy công việc');
-            await tx.task.delete({ where: { id: task.id } });
+            await requireTaskAccess(tx, req.user, task, true);
+            await tx.task.delete({ where: { id: task.id, version: task.version } });
             return { task, notifications: await taskNotifications(tx, task, req.user.id, 'TASK_DELETED') };
         });
         await publishNotifications(notifications, [req.user.id], task.id);

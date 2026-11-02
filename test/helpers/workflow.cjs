@@ -3,6 +3,7 @@ const crypto = require('crypto');
 function workflowModels(prisma) {
     prisma.$queryRaw ||= async () => [];
     prisma.facilityStaff ||= { findMany: async () => [], findUnique: async ({ where }) => where.facilityId_userId };
+    prisma.facilityManager ||= { findMany: async () => [{ facilityId: 1 }], findUnique: async ({ where }) => where.facilityId_userId };
     prisma.batchStaff ||= { findUnique: async ({ where }) => where.batchId_userId, findMany: async () => [], deleteMany: async () => ({ count: 0 }) };
     prisma.notification ||= { upsert: async ({ create }) => ({ id: crypto.randomUUID(), ...create }) };
     prisma.pushDevice ||= { findMany: async () => [] };

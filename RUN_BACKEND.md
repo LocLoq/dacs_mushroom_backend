@@ -21,6 +21,8 @@ Mở Swagger tại **http://localhost:8080/api-docs**. Nhấn `Ctrl+C` trong ter
 
 **Giữ `SKIP_SEED=1` khi chạy hằng ngày.** Nếu không đặt giá trị này, `start:stack` sẽ chạy seed trước khi bật server, cập nhật tài khoản demo và tạo lại nhật ký, thu hoạch, tiến trình, lịch sử nhận diện và audit demo.
 
+Khi đăng nhập, tạo tài khoản hoặc đổi mật khẩu, terminal backend in một dòng `[audit]` JSON gồm thời gian, `requestId`, hành động, tài khoản liên quan, HTTP status và kết quả `SUCCESS`/`FAILURE`. Các sự kiện cũng được lưu trong bảng `audit_logs` và admin xem tại **Nhật ký hệ thống**. Lọc `action=LOGIN`, `USER_CREATE`, `PASSWORD_CHANGE` (tự đổi mật khẩu) hoặc `PASSWORD_RESET` (admin đặt lại mật khẩu); cập nhật tài khoản thông thường dùng `USER_UPDATE`. Không ghi mật khẩu, hash hay JWT vào log. Khởi động lại backend sau khi cập nhật mã để bật thay đổi này; không cần migration database.
+
 ## 2. Phần mềm và cổng
 
 | Thành phần | Cấu hình sử dụng |

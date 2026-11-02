@@ -157,7 +157,7 @@ const getOverview = async (filters) => {
         prisma.harvestRecord.aggregate({ where: harvestWhere(filters), _sum: { totalYieldKg: true } }),
         prisma.cultivationBatch.count({ where: { ...cultivationWhere, expectedHarvestDate: { lte: new Date() }, status: { in: ['PREPARATION', 'INCUBATION', 'FRUITING', 'HARVESTING'] } } }),
         prisma.classifierLookup.findMany({ where: { createdAt: { gte: filters.from, lte: filters.to } }, select: { status: true, predictedName: true, confidence: true, createdAt: true } }),
-        prisma.auditLog.findMany({ where: { createdAt: { gte: filters.from, lte: filters.to } }, select: { action: true, actorUsername: true, outcome: true, createdAt: true } }),
+        filters.includeAudit ? prisma.auditLog.findMany({ where: { createdAt: { gte: filters.from, lte: filters.to } }, select: { action: true, actorUsername: true, outcome: true, createdAt: true } }) : [],
         prisma.harvestRecord.findMany({ where: harvestWhere(filters), select: { harvestedAt: true, totalYieldKg: true } })
     ]);
     const statusMap = Object.fromEntries(statusBreakdown.map((item) => [item.status, { count: item._count._all, averageDefectRate: item._avg.defectRate }]));
@@ -189,7 +189,7 @@ router.get('/financial', ...reportHandler('REPORT_FINANCIAL_VIEW', async (req, r
 
 router.get('/overview', ...reportHandler('REPORT_OVERVIEW_VIEW', async (req, res) => {
     const filters = getFilters(req.query);
-    res.json({ data: await getOverview(filters) });
+    res.json({ data: await getOverview({ ...filters, includeAudit: req.user.role === 'admin' }) });
 }));
 
 router.get('/cultivation', ...reportHandler('REPORT_CULTIVATION_VIEW', async (req, res) => {
@@ -206,6 +206,7 @@ router.get('/classifier', ...reportHandler('REPORT_CLASSIFIER_VIEW', async (req,
 }));
 
 router.get('/audit', ...reportHandler('REPORT_AUDIT_VIEW', async (req, res) => {
+    if (req.user.role !== 'admin') fail(403, 'Chỉ admin được xem nhật ký hệ thống', 'AUTH_FORBIDDEN');
     const filters = getFilters(req.query);
     const where = { createdAt: { gte: filters.from, lte: filters.to } };
     const [totalItems, data] = await Promise.all([prisma.auditLog.count({ where }), getAuditRows(filters, filters.skip, filters.limit)]);
@@ -241,9 +242,11 @@ const exportRows = async (type, filters, maxRows) => {
 
 router.get('/:type/export', ...reportHandler('REPORT_EXPORT', async (req, res) => {
     const { type } = req.params;
+    if (type === 'audit' && req.user.role !== 'admin') fail(403, 'Chỉ admin được xuất nhật ký hệ thống', 'AUTH_FORBIDDEN');
     const format = req.query.format === undefined ? '' : textField(req.query.format, 'format').toLowerCase();
     const filters = getFilters(req.query);
     if (!allowedTypes.has(type) || !['csv', 'xlsx', 'pdf'].includes(format)) fail(400, 'Loại báo cáo hoặc định dạng xuất không hợp lệ');
+    filters.includeAudit = req.user.role === 'admin';
 
     const maxRows = format === 'pdf' ? 2000 : 50000;
     const rows = await exportRows(type, filters, maxRows);

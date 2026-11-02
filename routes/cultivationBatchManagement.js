@@ -10,7 +10,7 @@ const router = express.Router();
 
 const { authenticateToken, authorizeRoles } = require('../middlewares/auth');
 const prisma = global.prisma;
-const { batchScope, requireBatchAccess, batchAccessMiddleware } = require('../services/access');
+const { batchScope, requireBatchAccess, requireFacilityAccess, batchAccessMiddleware } = require('../services/access');
 const { refreshBatch, refreshUsers } = require('../services/workflowEvents');
 const { notifyUsers, publishNotifications } = require('../services/notifications');
 router.use(require('./staffAssignments').createStaffRouter('batch'));
@@ -164,6 +164,7 @@ router.post('/', authenticateToken, authorizeRoles(...global.privilegedRoles), h
 
     if (batchData.batchCode !== undefined) fail(400, 'Mã lô được cấp tự động');
     for (const field of ['facilityId', 'mushroomId', 'startDate']) if (batchData[field] === undefined) fail(400, `${field} là bắt buộc`);
+    await requireFacilityAccess(prisma, req.user, batchData.facilityId);
     const newBatch = await createBatchWithCode(prisma, batchData);
 
     await refreshBatch(newBatch.id);
@@ -362,6 +363,7 @@ router.put('/:id', authenticateToken, authorizeRoles(...global.allRoles), batchA
     }
     const { updatedBatch, revoked, notifications } = await workflowTransaction(prisma, async (tx) => {
         const existing = await requireBatchAccess(tx, req.user, id, true);
+        if (batchData.facilityId !== undefined && batchData.facilityId !== existing.facilityId) await requireFacilityAccess(tx, req.user, batchData.facilityId, true);
         const revoked = batchData.facilityId !== undefined && batchData.facilityId !== existing.facilityId
             ? await tx.batchStaff.findMany({ where: { batchId: id } }) : [];
         if (revoked.length) await tx.batchStaff.deleteMany({ where: { batchId: id } });

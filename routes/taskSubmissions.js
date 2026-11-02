@@ -89,6 +89,7 @@ router.post('/tasks/:id/submissions/:submissionId/review', auditAction('TASK_REV
     const { reviewed, notifications } = await workflowTransaction(prisma, async (tx) => {
         const task = await tx.task.findUnique({ where: { id: req.params.id } });
         if (!task) fail(404, 'Không tìm thấy công việc');
+        await requireTaskAccess(tx, req.user, task, true);
         const submission = await tx.taskSubmission.findFirst({ where: { id: req.params.submissionId, taskId: task.id } });
         if (!submission) fail(404, 'Không tìm thấy lần gửi minh chứng');
         if (submission.submittedByUserId === req.user.id) fail(403, 'Không được tự duyệt minh chứng');

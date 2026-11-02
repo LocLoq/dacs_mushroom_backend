@@ -1,4 +1,5 @@
 const crypto = require('crypto');
+const ACCOUNT_ACTIONS = new Set(['LOGIN', 'USER_CREATE', 'PASSWORD_CHANGE', 'PASSWORD_RESET']);
 
 const IMPORTANT_GET_PATHS = new Set([
     '/api/reports/overview',
@@ -17,7 +18,7 @@ const safeValue = (value) => {
     if (Array.isArray(value)) return value.slice(0, 20).map(safeValue);
     if (typeof value === 'object') {
         return Object.fromEntries(Object.entries(value)
-            .filter(([key]) => !['password', 'password_hash', 'token', 'authorization'].includes(key.toLowerCase()))
+            .filter(([key]) => !/password|passwd|secret|token|authorization|cookie/i.test(key))
             .slice(0, 20)
             .map(([key, item]) => [key, safeValue(item)]));
     }
@@ -25,6 +26,15 @@ const safeValue = (value) => {
 };
 
 const writeAuditLog = async (data) => {
+    if (ACCOUNT_ACTIONS.has(data.action)) {
+        console.info('[audit]', JSON.stringify({
+            timestamp: new Date().toISOString(), requestId: data.requestId,
+            action: data.action, outcome: data.outcome, statusCode: data.statusCode,
+            actorUserId: data.actorUserId, actorUsername: data.actorUsername,
+            entityType: data.entityType, entityId: data.entityId,
+            username: typeof data.metadata?.username === 'string' ? data.metadata.username : null
+        }));
+    }
     try {
         await global.prisma.auditLog.create({ data });
     } catch (error) {
@@ -69,7 +79,7 @@ const auditMiddleware = (req, res, next) => {
             actorUserId: actor?.id || null,
             actorUsername: actor?.username || null,
             actorRole: actor?.role || null,
-            action: audit.action || `${req.method}_${fallbackEntityType.replace(/-/g, '_').toUpperCase()}`,
+            action: (typeof audit.action === 'function' ? audit.action(req, res) : audit.action) || `${req.method}_${fallbackEntityType.replace(/-/g, '_').toUpperCase()}`,
             entityType: audit.entityType || fallbackEntityType,
             entityId: (typeof audit.entityId === 'function' ? audit.entityId(req, res) : audit.entityId) || fallbackEntityId,
             method: req.method,

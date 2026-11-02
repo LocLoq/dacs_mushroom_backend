@@ -10,6 +10,7 @@ const { authenticateToken, authorizeRoles } = require('../middlewares/auth');
 const prisma = global.prisma;
 const { facilityScope, requireFacilityAccess } = require('../services/access');
 router.use(require('./staffAssignments').createStaffRouter('facility'));
+router.use(require('./facilityManagers'));
 const { createGalleryRouter } = require('./gallery');
 const { galleryInclude, withGallery, removeStoredMedia } = require('../services/gallery');
 router.use(createGalleryRouter('productionFacility', 'facilityImage', 'facilityId'));
@@ -86,7 +87,7 @@ router.get('/:id', authenticateToken, authorizeRoles(...allRoles), handle(async 
 }));
 
 // 3. POST / - Thêm cơ sở sản xuất mới
-router.post('/', authenticateToken, authorizeRoles(...managerAndAdmin), handle(async (req, res) => {
+router.post('/', authenticateToken, authorizeRoles('admin'), handle(async (req, res) => {
     const { mushrooms, facilityData } = facilityDataFrom(req.body);
 
     // Cấu trúc connect cho mushrooms nếu frontend truyền mảng các ID nấm [1, 2, 3]
@@ -111,6 +112,7 @@ router.post('/', authenticateToken, authorizeRoles(...managerAndAdmin), handle(a
 // 4. PUT /:id - Cập nhật thông tin cơ sở
 router.put('/:id', authenticateToken, authorizeRoles(...managerAndAdmin), handle(async (req, res) => {
     const id = parseId(req.params.id);
+    await requireFacilityAccess(prisma, req.user, id);
     const { mushrooms, facilityData } = facilityDataFrom(req.body);
 
     // Xử lý quan hệ N-N: Dùng set để ghi đè lại toàn bộ danh sách nấm liên kết với cơ sở này

@@ -24,7 +24,8 @@ test('health, classifier history and all report JSON endpoints have happy paths'
   let response = await fetch(`${baseUrl}/api/test`); assert.equal(response.status, 200);
   response = await request('/api/mushroom-classifier/history'); assert.equal(response.status, 200);
   response = await request(`/api/mushroom-classifier/history/${lookup.id}`); assert.equal(response.status, 200);
-  for (const type of ['overview', 'cultivation', 'classifier', 'audit']) { response = await request(`/api/reports/${type}`); assert.equal(response.status, 200, type); }
+  for (const type of ['overview', 'cultivation', 'classifier']) { response = await request(`/api/reports/${type}`); assert.equal(response.status, 200, type); }
+  for (const path of ['/api/reports/audit', '/api/reports/audit/export?format=csv']) assert.equal((await request(path)).status, 403);
 });
 
 test('reports and classifier history share strict filter and pagination validation', async (t) => {

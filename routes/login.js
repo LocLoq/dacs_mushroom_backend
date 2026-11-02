@@ -11,6 +11,7 @@ const prisma = global.prisma;
 
 router.post('/login', auditAction('LOGIN', {
   entityType: 'User',
+  entityId: (_, res) => res.locals.loginUserId === undefined ? null : String(res.locals.loginUserId),
   metadata: (req) => ({ username: req.body?.username || null })
 }), handle(async (req, res) => {
   fields(req.body, ['username', 'password']);
@@ -22,6 +23,7 @@ router.post('/login', auditAction('LOGIN', {
     where: { username },
     include: { role: true }
   });
+  if (user) res.locals.loginUserId = user.id;
 
   if (!user) {
     fail(401, 'Invalid credentials');

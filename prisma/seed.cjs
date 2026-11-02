@@ -38,6 +38,10 @@ async function main() {
   const facilities = [];
   for (const [taxCode, name, facilityType, status] of facilityData) facilities.push(await prisma.productionFacility.upsert({ where: { taxCode }, update: { name, facilityType, status, mushrooms: { set: mushrooms.map(({ id }) => ({ id })) } }, create: { taxCode, name, address: 'Địa chỉ demo', province: 'Lâm Đồng', facilityType, status, capacityTonsPerYear: 100, totalAreaSqm: 500, mushrooms: { connect: mushrooms.map(({ id }) => ({ id })) } } }));
   const batchRows = []; let batchIndex = 0;
+  for (const facility of facilities) {
+    await prisma.facilityManager.upsert({ where: { facilityId_userId: { facilityId: facility.id, userId: users.manager.id } }, update: {}, create: { facilityId: facility.id, userId: users.manager.id, grantedByUserId: users.admin.id } });
+    await prisma.facilityStaff.upsert({ where: { facilityId_userId: { facilityId: facility.id, userId: users.staff.id } }, update: {}, create: { facilityId: facility.id, userId: users.staff.id, grantedByUserId: users.admin.id } });
+  }
   for (const [status, count] of statuses) for (let occurrence = 0; occurrence < count; occurrence++, batchIndex++) {
     const batchCode = `DEMO-BATCH-${String(batchIndex + 1).padStart(3, '0')}`;
     const startDate = minusDays(30 + (batchIndex % 24) * 30 + Math.floor(batchIndex / 24) * 3);
@@ -58,6 +62,7 @@ async function main() {
     });
   }
   const demoBatchIds = batchRows.map(({ id }) => id);
+  for (const batch of batchRows) await prisma.batchStaff.upsert({ where: { batchId_userId: { batchId: batch.id, userId: users.staff.id } }, update: {}, create: { batchId: batch.id, userId: users.staff.id, grantedByUserId: users.admin.id } });
   await prisma.growthProgressImage.deleteMany({ where: { growthProgress: { batchId: { in: demoBatchIds } } } });
   await Promise.all([prisma.cultivationCareLog.deleteMany({ where: { batchId: { in: demoBatchIds } } }), prisma.growthProgressRecord.deleteMany({ where: { batchId: { in: demoBatchIds } } }), prisma.harvestRecord.deleteMany({ where: { batchId: { in: demoBatchIds } } })]);
   const uploadDir = path.join(__dirname, '..', 'uploads', 'growth-progress'); await fs.promises.mkdir(uploadDir, { recursive: true });

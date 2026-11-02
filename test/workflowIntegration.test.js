@@ -25,14 +25,14 @@ let secondBatch;
 let species;
 let facility;
 const uploadedUrls = new Set();
-const token = (user) => jwt.sign({ id: user.id, username: user.username, tokenver: 0 }, process.env.JWT_SECRET);
+const token = (user) => jwt.sign({ id: user.id, username: user.username, tokenver: user.tokenver ?? 0 }, process.env.JWT_SECRET);
 const request = async (url, user = manager, body, method = body === undefined ? 'GET' : 'POST') => {
     const response = await fetch(`${baseUrl}${url}`, { method, headers: { ...(user ? { authorization: `Bearer ${token(user)}` } : {}), ...(body && !(body instanceof FormData) ? { 'content-type': 'application/json' } : {}) }, ...(body === undefined ? {} : { body: body instanceof FormData ? body : JSON.stringify(body) }) });
     const data = (response.headers.get('content-type') || '').includes('application/json') ? await response.json() : Buffer.from(await response.arrayBuffer());
-    return { status: response.status, body: data };
+    return { status: response.status, body: data, requestId: response.headers.get('x-request-id') };
 };
 const createTask = async (assignee = staff, batchId = batch.id) => {
-    const result = await request('/dashboard/tasks', manager, { title: 'Kiểm tra sinh trưởng', batchId, assigneeUserId: assignee.id });
+    const result = await request('/dashboard/tasks', assignee.id === manager.id ? admin : manager, { title: 'Kiểm tra sinh trưởng', batchId, assigneeUserId: assignee.id });
     assert.equal(result.status, 201, JSON.stringify(result.body));
     return result.body.data;
 };
@@ -51,7 +51,7 @@ before(async () => {
     assert.match(database, /^dacs_feature_test_[a-f0-9]{16}$/);
     await connection.query(`CREATE DATABASE \`${database}\` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci`);
     await connection.query(`USE \`${database}\``);
-    for (const filename of ['test/fixtures/pre_workflow_schema.sql', 'sql/workflow_finance_gallery.sql', 'sql/gallery_visibility.sql', 'sql/classifier_resilience.sql', 'sql/account_password_batch_codes.sql', 'sql/staff_care_notifications.sql', 'sql/unifiedpush_apns.sql', 'sql/firebase_push.sql', 'sql/push_device_origin.sql']) {
+    for (const filename of ['test/fixtures/pre_workflow_schema.sql', 'sql/workflow_finance_gallery.sql', 'sql/gallery_visibility.sql', 'sql/classifier_resilience.sql', 'sql/account_password_batch_codes.sql', 'sql/staff_care_notifications.sql', 'sql/unifiedpush_apns.sql', 'sql/firebase_push.sql', 'sql/push_device_origin.sql', 'sql/facility_managers.sql']) {
         if (filename === 'sql/account_password_batch_codes.sql') await connection.query("INSERT INTO cultivation_batches (batch_code,facility_id,mushroom_id,start_date,updated_at) VALUES ('LO-CS12-2026-099',1,1,NOW(3),NOW(3))");
         const statements = fs.readFileSync(path.join(__dirname, '..', filename), 'utf8').split(';').map((statement) => statement.trim()).filter(Boolean);
         for (const statement of statements) await connection.query(statement);
@@ -108,6 +108,7 @@ before(async () => {
     other = await prisma.user.create({ data: userData('other', staffRole.id) });
     species = await prisma.mushroom.create({ data: { scientificName: 'Test species', commonName: 'Nấm thử', family: 'Test', genus: 'Test', edibilityStatus: 'EDIBLE', imageUrl: 'https://example.test/legacy.jpg' } });
     facility = await prisma.productionFacility.create({ data: { name: 'Trại thử', address: 'Đà Lạt', facilityType: 'HOUSEHOLD' } });
+    await prisma.facilityManager.create({ data: { facilityId: facility.id, userId: manager.id, grantedByUserId: admin.id } });
     batch = await prisma.cultivationBatch.create({ data: { batchCode: 'TEST-001', facilityId: facility.id, mushroomId: species.id, startDate: new Date('2025-01-01') } });
     secondBatch = await prisma.cultivationBatch.create({ data: { batchCode: 'TEST-002', facilityId: facility.id, mushroomId: species.id, startDate: new Date('2025-01-01') } });
     for (const member of [staff, other]) {
@@ -115,6 +116,7 @@ before(async () => {
         for (const assigned of [batch, secondBatch]) await prisma.batchStaff.create({ data: { userId: member.id, batchId: assigned.id } });
     }
     const app = express();
+    app.use(['/api/login', '/api/auth/change-password', '/api/admin/users'], require('../middlewares/audit').auditMiddleware);
     app.use(express.json());
     app.use('/api', require('../routes/login'));
     app.use('/uploads', require('../middlewares/galleryMedia').galleryMediaAccess, express.static(path.join(__dirname, '..', 'uploads')));
@@ -140,6 +142,119 @@ after(async () => {
     for (const url of uploadedUrls) {
         assert.match(url, /^\/uploads\/(gallery|growth-progress|care-logs)\/[a-f0-9-]+\.(png|jpg|webp)$/);
         await fs.promises.unlink(path.join(__dirname, '..', url.slice(1))).catch((error) => { if (error.code !== 'ENOENT') throw error; });
+    }
+});
+
+test('facility managers can only assign and manage work in their facilities, including unbatched work', { skip: !enabled }, async () => {
+    const makeUser = (username, role_id) => prisma.user.create({ data: { username, password_hash: 'unused', full_name: username, phone_number: '', email: '', tokenver: 0, role_id } });
+    const scopedManager = await makeUser('scoped-manager', manager.role_id);
+    const secondManager = await makeUser('second-scoped-manager', manager.role_id);
+    const ownStaff = await makeUser('scoped-staff', staff.role_id);
+    const outsideStaff = await makeUser('outside-staff', staff.role_id);
+    const ownFacility = await prisma.productionFacility.create({ data: { name: 'Managed', address: 'Test', facilityType: 'HOUSEHOLD' } });
+    const outsideFacility = await prisma.productionFacility.create({ data: { name: 'Unmanaged', address: 'Test', facilityType: 'HOUSEHOLD' } });
+    const makeBatch = (facilityId, batchCode) => prisma.cultivationBatch.create({ data: { facilityId, batchCode, mushroomId: species.id, startDate: new Date() } });
+    const ownBatch = await makeBatch(ownFacility.id, 'MANAGER-SCOPE-OWN');
+    const outsideBatch = await makeBatch(outsideFacility.id, 'MANAGER-SCOPE-OUTSIDE');
+    const ownPath = `/production-facilities/${ownFacility.id}`;
+    const outPath = `/production-facilities/${outsideFacility.id}`;
+    const work = { title: 'Scoped work', assigneeUserId: ownStaff.id };
+    assert.equal((await request('/dashboard/tasks', scopedManager, work)).status, 403);
+    assert.equal((await request(`${ownPath}/managers`, scopedManager, { userId: scopedManager.id })).status, 403);
+    assert.equal((await request(`${ownPath}/managers`, admin, { userIds: [scopedManager.id, ownStaff.id] })).status, 400);
+    assert.equal(await prisma.facilityManager.count({ where: { facilityId: ownFacility.id } }), 0);
+    assert.equal((await request(`${ownPath}/managers`, admin, { userIds: [scopedManager.id, scopedManager.id, secondManager.id] })).body.addedCount, 2);
+    assert.equal((await request(`${ownPath}/managers`, admin, { userId: scopedManager.id })).status, 201);
+    assert.equal((await request(`${ownPath}/managers?limit=1`, admin)).body.pagination.totalItems, 2);
+    assert.equal((await request(`${ownPath}/staff`, scopedManager, { userId: ownStaff.id })).status, 403);
+    assert.equal((await request(`${ownPath}/staff`, admin, { userId: ownStaff.id })).status, 201);
+    assert.equal((await request(`${outPath}/staff`, scopedManager, { userId: ownStaff.id })).status, 403);
+    assert.equal((await request(`${outPath}/staff`, admin, { userId: outsideStaff.id })).status, 201);
+    assert.equal((await request(`/cultivation-batches/${ownBatch.id}/staff`, scopedManager, { userId: ownStaff.id })).status, 403);
+    assert.equal((await request(`/cultivation-batches/${ownBatch.id}/staff`, admin, { userId: ownStaff.id })).status, 201);
+    assert.equal((await request(`/cultivation-batches/${outsideBatch.id}/staff`, admin, { userId: outsideStaff.id })).status, 201);
+    const candidates = await request('/dashboard/task-assignees?limit=1', scopedManager);
+    assert.deepEqual(candidates.body.data.map(u => u.id), [ownStaff.id]);
+    assert.equal(candidates.body.pagination.totalItems, 1);
+    assert.equal((await request(`/dashboard/task-assignees?batchId=${outsideBatch.id}`, scopedManager)).status, 403);
+    for (const body of [
+        { ...work, assigneeUserId: outsideStaff.id },
+        { ...work, assigneeUserId: admin.id },
+        { ...work, assigneeUserId: scopedManager.id },
+        { ...work, batchId: outsideBatch.id }
+    ]) assert.equal((await request('/dashboard/tasks', scopedManager, body)).status, 403);
+    assert.equal((await request('/dashboard/tasks', scopedManager, { ...work, batchId: ownBatch.id, assigneeUserId: outsideStaff.id })).status, 400);
+    const unbatched = await request('/dashboard/tasks', scopedManager, work);
+    const batched = await request('/dashboard/tasks', scopedManager, { ...work, batchId: ownBatch.id });
+    assert.equal(unbatched.status, 201, JSON.stringify(unbatched.body));
+    assert.equal(batched.status, 201, JSON.stringify(batched.body));
+    assert.equal((await request('/dashboard/tasks', secondManager, work)).status, 201);
+    const foreign = await request('/dashboard/tasks', admin, { title: 'Foreign work', batchId: outsideBatch.id, assigneeUserId: outsideStaff.id });
+    for (const [method, body] of [['GET', undefined], ['PATCH', { title: 'Forged' }], ['DELETE', undefined]]) {
+        assert.equal((await request(`/dashboard/tasks/${foreign.body.data.id}`, scopedManager, body, method)).status, 403);
+    }
+    assert.equal((await request(`/dashboard/tasks/${foreign.body.data.id}/submissions/missing/review`, scopedManager, { decision: 'APPROVE' })).status, 403);
+    assert.equal((await request(`/dashboard/tasks/${unbatched.body.data.id}`, scopedManager, { assigneeUserId: outsideStaff.id }, 'PATCH')).status, 403);
+    assert.equal((await request(`/dashboard/tasks/${batched.body.data.id}`, scopedManager, { batchId: outsideBatch.id }, 'PATCH')).status, 403);
+    const visible = await request('/dashboard/tasks?status=ALL', scopedManager);
+    assert.ok(visible.body.data.every(t => t.id !== foreign.body.data.id));
+    const facilities = await request('/production-facilities', scopedManager);
+    assert.deepEqual(facilities.body.data.map(f => f.id), [ownFacility.id]);
+    assert.equal((await request(`${ownPath}/managers/${scopedManager.id}`, admin, undefined, 'DELETE')).status, 200);
+    assert.deepEqual((await request('/dashboard/task-assignees', scopedManager)).body.data, []);
+    for (const task of [unbatched.body.data, batched.body.data]) {
+        assert.equal((await request(`/dashboard/tasks/${task.id}`, scopedManager)).status, 403);
+        assert.equal((await request(`/dashboard/tasks/${task.id}`, scopedManager, { status: 'CANCELLED' }, 'PATCH')).status, 403);
+        assert.equal((await request(`/dashboard/tasks/${task.id}`, scopedManager, undefined, 'DELETE')).status, 403);
+    }
+    assert.equal((await request('/dashboard/tasks', scopedManager, work)).status, 403);
+    assert.equal((await request(`/dashboard/tasks/${batched.body.data.id}`, ownStaff)).status, 200);
+    assert.equal((await request(`/dashboard/tasks/${batched.body.data.id}`, admin)).status, 200);
+});
+
+test('only admins can access account and system administration APIs', { skip: !enabled }, async () => {
+    for (const url of ['/admin/users', '/admin/roles', '/admin/audit-logs', '/reports/audit', '/reports/audit/export?format=csv']) {
+        assert.equal((await request(url, admin)).status, 200, url);
+        for (const actor of [manager, staff]) assert.equal((await request(url, actor)).status, 403, url);
+    }
+});
+
+test('account events persist as identifiable audit records in MariaDB without credentials', { skip: !enabled }, async () => {
+    const username = 'audit-integration-user';
+    const initialPassword = 'create-audit-integration-secret';
+    const newPassword = 'changed-audit-integration-secret';
+    const adminPassword = 'reset-audit-integration-secret';
+    const created = await request('/admin/users', admin, { username, password: initialPassword, full_name: 'Audit integration', email: 'audit@example.test', phone_number: '0900000000', role_id: staff.role_id });
+    assert.equal(created.status, 201, JSON.stringify(created.body));
+    const target = await prisma.user.findUnique({ where: { id: created.body.data.id } });
+    const rejected = await request('/login', null, { username, password: 'wrong-audit-integration-secret' });
+    assert.equal(rejected.status, 401);
+    const login = await request('/login', null, { username, password: initialPassword });
+    assert.equal(login.status, 200);
+    const changed = await request('/auth/change-password', target, { current_password: initialPassword, new_password: newPassword });
+    assert.equal(changed.status, 200);
+    const reset = await request(`/admin/users/${target.id}`, admin, { password: adminPassword }, 'PUT');
+    assert.equal(reset.status, 200);
+    for (const [result, action, actorId, outcome] of [
+        [created, 'USER_CREATE', admin.id, 'SUCCESS'], [rejected, 'LOGIN', null, 'FAILURE'],
+        [login, 'LOGIN', target.id, 'SUCCESS'], [changed, 'PASSWORD_CHANGE', target.id, 'SUCCESS'],
+        [reset, 'PASSWORD_RESET', admin.id, 'SUCCESS']
+    ]) {
+        assert.ok(result.requestId);
+        let record;
+        for (let attempt = 0; attempt < 100 && !record; attempt++) {
+            record = await prisma.auditLog.findFirst({ where: { requestId: result.requestId } });
+            if (!record) await new Promise(resolve => setTimeout(resolve, 10));
+        }
+        assert.ok(record, `${action} must persist`);
+        assert.equal(record.action, action);
+        assert.equal(record.actorUserId, actorId);
+        assert.equal(record.entityType, 'User');
+        assert.equal(record.entityId, String(target.id));
+        assert.equal(record.outcome, outcome);
+        for (const secret of [initialPassword, newPassword, adminPassword, 'wrong-audit-integration-secret', login.body.token, changed.body.token]) {
+            assert.ok(!JSON.stringify(record).includes(secret));
+        }
     }
 });
 
@@ -384,6 +499,7 @@ test('new SQL defaults preserve accounts and seed counters from issued codes', {
   assert.equal((await prisma.batchCodeCounter.findUnique({ where: { facilityId_year: { facilityId: 12, year: 2026 } } })).lastNumber, 99);
 });
 test('concurrent automatic codes are unique, isolated, immutable and never reused', { skip: !enabled }, async () => {
+  await prisma.facilityManager.upsert({ where: { facilityId_userId: { facilityId: 1, userId: manager.id } }, update: {}, create: { facilityId: 1, userId: manager.id } });
   const data = { facilityId: facility.id, mushroomId: species.id, startDate: '2030-12-31T17:00:00Z', status: 'PREPARATION' };
   const created = await Promise.all(Array.from({ length: 12 }, () => request('/cultivation-batches', manager, data)));
   for (const row of created) assert.equal(row.status, 201, JSON.stringify(row.body));
@@ -425,6 +541,7 @@ test('staff scope, care photos, notification ownership and immediate revocation'
     const facilityPath = '/production-facilities/' + facilityRow.id;
     assert.equal((await request(staffPath, staff)).status, 403);
     assert.equal((await request(staffPath + '/staff', manager, { userId: staff.id })).status, 403);
+    assert.equal((await request(facilityPath + '/managers', admin, { userId: manager.id })).status, 201);
     assert.equal((await request(staffPath + '/staff', admin, { userId: staff.id })).status, 400);
     assert.equal((await request(facilityPath + '/staff', admin, { userId: staff.id })).status, 201);
     assert.equal((await request(staffPath, staff)).status, 403);

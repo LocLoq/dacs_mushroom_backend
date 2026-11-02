@@ -182,3 +182,10 @@ Máy nhận chạy `docker load -i backups/mushroom-images.tar`, sao chép `comp
 | Ảnh không hiển thị | Ghép URL `/uploads/...` với server origin; giữ và phục hồi volume upload cùng database |
 
 Bản CPU dùng phiên bản torch/torchvision tương ứng với baseline của dự án theo [hướng dẫn PyTorch](https://pytorch.org/get-started/previous-versions/). Chạy trực tiếp với CUDA trên Windows vẫn dùng `helper/mushroom_classifier/requirements.txt` và [RUN_BACKEND.md](RUN_BACKEND.md).
+# Quản lý database bằng phpMyAdmin
+
+Stack có dịch vụ `phpmyadmin`, mặc định tại http://127.0.0.1:8081. Đăng nhập bằng `DB_USER` và `DB_PASSWORD` trong `.env.docker` (đây là tài khoản database, khác tài khoản ứng dụng). Đổi cổng bằng `PHPMYADMIN_PORT`; mặc định chỉ bind localhost, kể cả khi dùng cấu hình VPS. Truy cập từ máy khác qua SSH tunnel nếu cần.
+
+Sau khi cập nhật, chạy `docker compose --env-file .env.docker up -d --build`. Dịch vụ `db-init` tạo bảng `facility_managers` qua Prisma. Admin vào chi tiết cơ sở trên Flutter → **Quản lý manager** để chỉ định người quản lý; các manager hiện có không được tự động cấp quyền cho mọi cơ sở.
+
+Chạy backend ngoài Docker: `npm run db:migrate:managers` rồi `npm run prisma:generate` trước khi khởi động. Migration chỉ thêm bảng, không gán quyền hay thay đổi dữ liệu hiện có.

@@ -26,7 +26,7 @@ async function refreshUsers(userIds, resource, id) {
         try {
             const user = await resolveUser(socket.data.token);
             if (!user || user.must_change_password) return socket.disconnect(true);
-            if (['batches', 'care-logs', 'growth-progress', 'harvests'].includes(resource) && id !== undefined && user.role === 'staff') {
+            if (['batches', 'care-logs', 'growth-progress', 'harvests'].includes(resource) && id !== undefined && user.role !== 'admin') {
                 const allowed = await global.prisma.cultivationBatch.findFirst({ where: { id: Number(id), ...batchScope(user) }, select: { id: true } });
                 if (!allowed) return;
             }
@@ -36,7 +36,8 @@ async function refreshUsers(userIds, resource, id) {
 }
 async function batchRecipients(client, batchId) {
     const users = await client.user.findMany({ where: { OR: [
-        { role: { name: { in: ['admin', 'manager'] } } },
+        { role: { name: 'admin' } },
+        { role: { name: 'manager' }, facilityManagements: { some: { facility: { cultivationBatches: { some: { id: batchId } } } } } },
         { role: { name: 'staff' }, batchAssignments: { some: { batchId } }, facilityMemberships: { some: { facility: { cultivationBatches: { some: { id: batchId } } } } } }
     ] }, select: { id: true } });
     return users.map((user) => user.id);

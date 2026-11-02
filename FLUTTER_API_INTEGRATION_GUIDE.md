@@ -77,6 +77,12 @@ Web client phải được thêm vào biến môi trường backend `CORS_ALLOWE
 
 ## Dashboard công việc
 
+Dashboard tổng quan và các màn hình quản trị tài khoản, vai trò, nhật ký hệ thống chỉ dành cho admin. API công việc vẫn giữ `/dashboard/tasks` cho cả ba role. Manager chỉ xem và quản lý công việc trong cơ sở được admin gán; picker `/dashboard/task-assignees` chỉ trả nhân viên thuộc cơ sở đó. Có `batchId` thì nhân viên còn phải được phân công lô. Không gắn lô vẫn được giao cho nhân viên thuộc ít nhất một cơ sở quản lý.
+
+Admin quản lý manager tại `/production-facilities/:id/managers`: GET phân trang (thêm `available=true` để chọn người chưa được gán), POST `{userId}` hoặc `{userIds:[...]}`, DELETE `/:userId`. Một cơ sở có nhiều manager và một manager quản lý nhiều cơ sở. Chỉ tài khoản role manager được gán. Việc gán nhân viên vào cơ sở/lô vẫn cần admin. Khi nhận refresh `permissions`, tải lại danh sách và xử lý `403` nếu quyền đã bị thu hồi.
+
+Database hiện có: chạy `npm run db:migrate:managers` và `npm run prisma:generate`. Không tự suy ra quyền quản lý từ dữ liệu cũ; admin phải chỉ định manager. Docker `db-init` áp dụng schema khi cập nhật stack.
+
 Gọi `GET /dashboard/tasks` cho cả ba role. Mặc định response phân trang gồm `TODO`, `IN_PROGRESS`, `PENDING_REVIEW`, sắp xếp theo hạn gần nhất; dùng `status=ALL` để xem lịch sử. Mỗi item có `batchCode` và `assignee` có thể `null` khi chưa liên kết/giao việc. Danh sách trả `submissions` gồm tối đa một lần gửi gần nhất (bản tóm tắt); `GET /dashboard/tasks/{id}` trả toàn bộ lịch sử kèm snapshot `evidence` và `notes`. Không dùng response list để hiển thị nội dung minh chứng.
 
 Admin và manager gọi `POST /dashboard/tasks`, `PATCH /dashboard/tasks/:id`, `DELETE /dashboard/tasks/:id` và `GET /dashboard/task-assignees`. Staff chỉ PATCH `{ "status": "TODO" | "IN_PROGRESS" }` cho việc mở đang được giao cho mình. Không PATCH trực tiếp sang `COMPLETED` hoặc `PENDING_REVIEW` với bất kỳ role nào. Việc đã có lịch sử minh chứng không xóa được (`409`); manager/admin dùng hủy và có thể mở lại bằng `IN_PROGRESS`.
@@ -527,6 +533,8 @@ Khi tải file:
 - Hiển thị thông báo yêu cầu thu hẹp filter nếu backend trả `422`.
 
 ## 13. Audit log
+
+Chỉ admin được gọi API này, báo cáo `/reports/audit` và xuất báo cáo audit. Manager/staff nhận `403`. Giao diện Flutter ẩn lối vào và chặn mở trực tiếp các màn hình quản trị.
 
 ```http
 GET /api/admin/audit-logs

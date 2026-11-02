@@ -1477,7 +1477,7 @@ paths:
           $ref: '#/components/responses/ApiError'
   /api/admin/audit-logs:
     get:
-      summary: 'Xem audit log quản trị'
+      summary: 'Xem audit log quản trị (chỉ admin)'
       tags:
         - 'Quản trị viên'
       parameters:
@@ -1557,7 +1557,7 @@ paths:
           $ref: '#/components/responses/ApiError'
   /api/reports/audit:
     get:
-      summary: 'Xem báo cáo hoạt động audit'
+      summary: 'Xem báo cáo hoạt động audit (chỉ admin)'
       tags:
         - 'Báo cáo'
       responses:
@@ -3048,6 +3048,7 @@ paths:
   /api/dashboard/task-assignees:
     get:
       summary: 'Danh sách người có thể được giao việc'
+      description: 'Manager chỉ nhận nhân viên thuộc cơ sở được admin phân công quản lý. Nếu có batchId, lô phải thuộc cơ sở quản lý và nhân viên phải được phân công lô. Không có batchId vẫn được chọn nhân viên trong cơ sở quản lý.'
       tags:
         - Dashboard
       responses:
@@ -5452,5 +5453,75 @@ paths:
                         type: object
                         properties:
                           fcm: {type: boolean}
+        default:
+          $ref: '#/components/responses/ApiError'
+  '/api/production-facilities/{id}/managers':
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema: {type: integer, minimum: 1}
+    get:
+      summary: 'Admin xem manager cơ sở hoặc manager có thể thêm'
+      tags: ['Quản trị viên']
+      parameters:
+        - name: available
+          in: query
+          schema: {type: boolean, default: false}
+        - name: search
+          in: query
+          schema: {type: string}
+        - name: page
+          in: query
+          schema: {type: integer, minimum: 1, default: 1}
+        - name: limit
+          in: query
+          schema: {type: integer, minimum: 1, maximum: 100, default: 20}
+      responses:
+        '200':
+          description: 'Phân trang data và pagination. Mặc định mỗi phần tử có facilityId, userId, grantedByUserId, createdAt, user {id, username, full_name}. available=true trả user {id, username, full_name} chưa quản lý cơ sở.'
+        default:
+          $ref: '#/components/responses/ApiError'
+    post:
+      summary: 'Admin gán manager cho cơ sở (nhiều–nhiều, có thể gọi lại)'
+      tags: ['Quản trị viên']
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              properties:
+                userId: {type: integer, minimum: 1}
+                userIds:
+                  type: array
+                  minItems: 1
+                  maxItems: 100
+                  items: {type: integer, minimum: 1}
+              oneOf:
+                - required: [userId]
+                - required: [userIds]
+      responses:
+        '201':
+          description: 'data là một phân công khi gửi userId; gửi userIds trả data là mảng và addedCount. Chỉ nhận tài khoản role manager; toàn bộ nhóm rollback nếu có phần tử không hợp lệ.'
+        default:
+          $ref: '#/components/responses/ApiError'
+  '/api/production-facilities/{id}/managers/{userId}':
+    delete:
+      summary: 'Admin thu hồi quyền quản lý cơ sở; giữ lịch sử công việc'
+      tags: ['Quản trị viên']
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: {type: integer, minimum: 1}
+        - name: userId
+          in: path
+          required: true
+          schema: {type: integer, minimum: 1}
+      responses:
+        '200':
+          description: 'Quyền bị thu hồi ngay, có thể gọi lại.'
         default:
           $ref: '#/components/responses/ApiError'

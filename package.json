@@ -13,6 +13,7 @@
     "prisma:validate": "prisma validate",
     "postinstall": "prisma generate",
     "db:migrate:staff": "node scripts/migrate-staff-workflow.cjs",
+    "db:migrate:managers": "node scripts/migrate-facility-managers.cjs",
     "db:migrate:push": "node scripts/migrate-push.cjs",
     "start:local:push": "node scripts/start-local-push.cjs",
     "push:test": "node scripts/test-local-push.cjs",

@@ -30,6 +30,18 @@ services:
       timeout: 5s
       retries: 12
 
+  phpmyadmin:
+    image: phpmyadmin:5.2-apache
+    restart: unless-stopped
+    environment:
+      PMA_HOST: db
+      PMA_PORT: "3306"
+    ports:
+      - "${PHPMYADMIN_BIND_ADDRESS:-127.0.0.1}:${PHPMYADMIN_PORT:-8081}:80"
+    depends_on:
+      db:
+        condition: service_healthy
+
   redis:
     image: redis:7-alpine
     restart: unless-stopped
