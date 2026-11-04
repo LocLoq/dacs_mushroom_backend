@@ -87,7 +87,7 @@ router.get('/:id', authenticateToken, authorizeRoles(...allRoles), handle(async 
 }));
 
 // 3. POST / - Thêm cơ sở sản xuất mới
-router.post('/', authenticateToken, authorizeRoles('admin'), handle(async (req, res) => {
+router.post('/', authenticateToken, authorizeRoles(...managerAndAdmin), handle(async (req, res) => {
     const { mushrooms, facilityData } = facilityDataFrom(req.body);
 
     // Cấu trúc connect cho mushrooms nếu frontend truyền mảng các ID nấm [1, 2, 3]
@@ -98,13 +98,19 @@ router.post('/', authenticateToken, authorizeRoles('admin'), handle(async (req, 
         };
     }
 
-    const newFacility = await prisma.productionFacility.create({
-        data: {
-            ...facilityData,
-            mushrooms: connectMushrooms
-        },
-        include: { mushrooms: true }
+    const newFacility = await workflowTransaction(prisma, async (tx) => {
+        const facility = await tx.productionFacility.create({
+            data: { ...facilityData, mushrooms: connectMushrooms },
+            include: { mushrooms: true }
+        });
+        if (req.user.role === 'manager') {
+            await tx.facilityManager.create({ data: {
+                facilityId: facility.id, userId: req.user.id, grantedByUserId: req.user.id
+            } });
+        }
+        return facility;
     });
+    if (req.user.role === 'manager') await refreshUsers([req.user.id], 'permissions');
 
     res.status(201).json({ message: 'Thêm cơ sở sản xuất thành công', data: newFacility });
 }));

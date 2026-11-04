@@ -15,7 +15,7 @@ function createStaffRouter(kind) {
     const model = batch ? 'batchStaff' : 'facilityStaff';
     const parentField = batch ? 'batchId' : 'facilityId';
     const key = `${parentField}_userId`;
-    const auth = [authenticateToken, authorizeRoles('admin')];
+    const auth = [authenticateToken, authorizeRoles('admin', 'manager')];
     const parent = async (tx, req, lock = false) => {
         const parentId = id(req.params.id);
         if (batch) return requireBatchAccess(tx, req.user, parentId, lock);

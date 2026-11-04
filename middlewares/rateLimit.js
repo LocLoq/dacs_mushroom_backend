@@ -1,8 +1,14 @@
 const { rateLimit, ipKeyGenerator } = require('express-rate-limit');
 const { resolveRequestUser } = require('./auth');
 const { positiveInteger } = require('../config/classifier.cjs');
+const { runtimeMode } = require('../config/runtime-mode.cjs');
 
-function createRateLimiters(environment = process.env) {
+function createRateLimiters(environment = process.env, mode = runtimeMode()) {
+    if (!['production', 'benchmark'].includes(mode)) throw new Error('Invalid runtime mode');
+    if (mode === 'benchmark') {
+        const pass = (_req, _res, next) => next();
+        return { api: pass, classifier: pass };
+    }
     const windowMs = positiveInteger(environment, 'RATE_LIMIT_WINDOW_MS', 60000);
     const identify = async (req) => {
         let user;

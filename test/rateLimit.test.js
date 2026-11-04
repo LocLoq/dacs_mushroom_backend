@@ -79,3 +79,19 @@ test('IPv6 fallback aggregates the /56 subnet and proxy trust is explicit', asyn
     assert.equal((await f.request('other', null, 'GET', { 'X-Forwarded-For': '2001:db8:abcd:12ff::2' })).status, 429);
     assert.throws(() => configureTrustProxy(f.app, { TRUST_PROXY: 'true' }));
 });
+
+test('benchmark image bypasses both quotas without bypassing authentication', async (t) => {
+    const app = express();
+    const limits = createRateLimiters({ API_RATE_LIMIT_MAX: '1', CLASSIFIER_RATE_LIMIT_MAX: '1' }, 'benchmark');
+    app.use('/api', limits.api);
+    app.get('/api/other', limits.classifier, (_req, res) => res.sendStatus(204));
+    app.post('/api/classify', limits.classifier, optionalAuthenticateToken, (_req, res) => res.sendStatus(204));
+    const server = await new Promise(resolve => { const s = app.listen(0, '127.0.0.1', () => resolve(s)); });
+    t.after(() => new Promise(resolve => server.close(resolve)));
+    for (let i = 0; i < 5; i++) {
+        assert.equal((await fetch(`http://127.0.0.1:${server.address().port}/api/other`)).status, 204);
+        const response = await fetch(`http://127.0.0.1:${server.address().port}/api/classify`, { method: 'POST', headers: { Authorization: 'Bearer invalid' } });
+        assert.equal(response.status, 401);
+    }
+    assert.throws(() => createRateLimiters({}, 'invalid'), /Invalid runtime mode/);
+});

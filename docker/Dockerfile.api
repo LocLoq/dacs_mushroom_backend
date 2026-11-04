@@ -34,4 +34,12 @@ FROM runtime AS test
 COPY --chown=node:node test ./test
 CMD ["npm", "test"]
 
+FROM runtime AS benchmark
+USER root
+RUN printf '{"mode":"benchmark"}\n' > /app/runtime-mode.json && chmod 444 /app/runtime-mode.json
+USER node
+
 FROM runtime AS production
+USER root
+RUN printf '{"mode":"production"}\n' > /app/runtime-mode.json && chmod 444 /app/runtime-mode.json
+USER node

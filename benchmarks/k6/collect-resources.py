@@ -8,6 +8,13 @@ import subprocess
 import sys
 import time
 
+def option(name, default):
+    return sys.argv[sys.argv.index(name) + 1] if name in sys.argv else default
+
+project = option('--project', 'dacs-mushroom')
+repo = option('--repo', '/home/loql/dacs_mushroom_backend')
+duration = int(option('--duration', '0'))
+
 
 class DockerConnection(http.client.HTTPConnection):
     def __init__(self):
@@ -46,19 +53,69 @@ def memory():
         values = {line.split(':')[0]: int(line.split()[1]) * 1024 for line in source}
     return {name: values[name] for name in ('MemTotal', 'MemAvailable', 'SwapTotal', 'SwapFree')}
 
+def host_io():
+    result = {'network': {}, 'disks': {}}
+    with open('/proc/net/dev') as source:
+        for line in list(source)[2:]:
+            name, counters = line.split(':', 1)
+            values = counters.split()
+            result['network'][name.strip()] = {'rx_bytes': int(values[0]), 'tx_bytes': int(values[8])}
+    with open('/proc/diskstats') as source:
+        for line in source:
+            values = line.split()
+            if len(values) >= 14:
+                result['disks'][values[2]] = {'read_sectors': int(values[5]), 'written_sectors': int(values[9])}
+    return result
+
 
 if '--metadata' in sys.argv:
     def command(*args):
-        result = subprocess.run(args, capture_output=True, text=True, timeout=15)
-        return {'exit_code': result.returncode, 'stdout': result.stdout.strip(), 'stderr': result.stderr.strip()}
+        try:
+            result = subprocess.run(args, capture_output=True, text=True, timeout=30)
+            return {'exit_code': result.returncode, 'stdout': result.stdout.strip(), 'stderr': result.stderr.strip()[:500]}
+        except (OSError, subprocess.TimeoutExpired) as error:
+            return {'exit_code': None, 'stdout': '', 'stderr': str(error)}
     running = docker('/containers/json')
     services = []
     for entry in running:
-        if entry.get('Labels', {}).get('com.docker.compose.project') != 'dacs-mushroom':
+        if entry.get('Labels', {}).get('com.docker.compose.project') != project:
             continue
         info = docker('/containers/%s/json' % entry['Id'])
-        services.append({'name': info['Name'], 'image': info['Config']['Image'],
-                         'image_id': info['Image'], 'state': info['State'],
+        service = entry.get('Labels', {}).get('com.docker.compose.service')
+        image = docker('/images/%s/json' % info['Image'])
+        env = dict(item.split('=', 1) for item in info['Config'].get('Env', []) if '=' in item)
+        allowed = ('RATE_LIMIT_WINDOW_MS', 'API_RATE_LIMIT_MAX', 'CLASSIFIER_RATE_LIMIT_MAX', 'TRUST_PROXY',
+                   'CLASSIFIER_MAX_CONCURRENCY', 'CLASSIFIER_DEVICE', 'CLASSIFIER_TIMEOUT_MS',
+                   'CLASSIFIER_JOB_ATTEMPTS', 'CLASSIFIER_RETRY_BACKOFF_MS', 'CLASSIFIER_QUEUE_WAIT_MS',
+                   'CLASSIFIER_PROCESSING_TIMEOUT_MS', 'NODE_ENV')
+        version = {}
+        if service == 'api':
+            version['runtime'] = command('docker', 'exec', entry['Id'], 'node', '-e',
+                "console.log(JSON.stringify({node:process.version,mode:require('./config/runtime-mode.cjs').runtimeMode(),pool:5,worker_concurrency:1}))")
+            version['npm'] = command('docker', 'exec', entry['Id'], 'npm', '--version')
+            version['node_dependencies'] = command('docker', 'exec', entry['Id'], 'node', '-e',
+                "const cp=require('child_process');let out;try{out=cp.execFileSync('npm',['ls','--all','--json'],{encoding:'utf8',maxBuffer:25000000,stdio:['ignore','pipe','pipe']})}catch(e){out=e.stdout||''};try{const j=JSON.parse(out);function f(x){return {version:x.version,dependencies:Object.fromEntries(Object.entries(x.dependencies||{}).map(([k,v])=>[k,f(v)]))}};console.log(JSON.stringify(f(j)))}catch(e){process.exit(1)}")
+            version['source_hash'] = command('docker', 'exec', entry['Id'], 'node', '-e',
+                "const fs=require('fs'),crypto=require('crypto'),h=crypto.createHash('sha256');function walk(p){for(const n of fs.readdirSync(p).sort()){const f=p+'/'+n;fs.statSync(f).isDirectory()?walk(f):h.update(f).update(fs.readFileSync(f))}};for(const p of ['config','routes','services','middlewares','queues','jobs'])walk(p);h.update(fs.readFileSync('server.cjs'));console.log(h.digest('hex'))")
+            version['database_runtime'] = command('docker', 'exec', entry['Id'], 'node', '-e',
+                "const m=require('mariadb');(async()=>{let c=await m.createConnection({host:process.env.DATABASE_HOST,user:process.env.DATABASE_USER,password:process.env.DATABASE_PASSWORD,database:process.env.DATABASE_NAME,port:Number(process.env.DATABASE_PORT||3306)});let r=await c.query('SELECT VERSION() AS version, @@max_connections AS max_connections, @@innodb_buffer_pool_size AS innodb_buffer_pool_size, @@collation_server AS collation_server');console.log(JSON.stringify(r[0],(_,v)=>typeof v==='bigint'?v.toString():v));await c.end()})().catch(()=>process.exit(1))")
+        elif service == 'classifier':
+            version['python'] = command('docker', 'exec', entry['Id'], 'python', '--version')
+            version['python_dependencies'] = command('docker', 'exec', entry['Id'], 'python', '-m', 'pip', 'list', '--format=json')
+            version['model_hashes'] = command('docker', 'exec', entry['Id'], 'python', '-c',
+                "import os,hashlib,json,pathlib; base=pathlib.Path('/app/helper/mushroom_classifier'); names={'model':('MODEL_PATH','nammushroom_efficientnet_b0.pth'),'labels':('LABELS_PATH','labels.txt'),'catalog':('MUSHROOM_CATALOG_PATH','mushroom.json')}; paths={k:base/os.getenv(e,n) for k,(e,n) in names.items()}; print(json.dumps({k:hashlib.sha256(p.read_bytes()).hexdigest() for k,p in paths.items()}))")
+            version['model_runtime'] = command('docker', 'exec', entry['Id'], 'python', '-c',
+                "import torch,json,os,pathlib; p=pathlib.Path('/app/helper/mushroom_classifier')/os.getenv('LABELS_PATH','labels.txt'); labels=[s for s in p.read_text().splitlines() if s.strip() and not s.strip().startswith('#')]; print(json.dumps({'architecture':'efficientnet_b0','class_count':len(labels),'requested_device':os.getenv('CLASSIFIER_DEVICE','auto'),'cuda_available':torch.cuda.is_available(),'cuda':torch.version.cuda,'cudnn':torch.backends.cudnn.version(),'torch':torch.__version__,'threads':torch.get_num_threads()}))")
+        elif service == 'db':
+            version['server'] = command('docker', 'exec', entry['Id'], 'mariadb', '--version')
+        elif service == 'redis':
+            version['server'] = command('docker', 'exec', entry['Id'], 'redis-cli', 'INFO', 'server')
+        version['os_packages'] = command('docker', 'exec', entry['Id'], 'sh', '-c', 'if command -v dpkg-query >/dev/null; then dpkg-query -W; elif command -v apk >/dev/null; then apk info -v; else exit 1; fi')
+        services.append({'name': info['Name'], 'service': service, 'image': info['Config']['Image'],
+                         'image_id': info['Image'], 'repo_digests': image.get('RepoDigests') or [],
+                         'state': {'status': info['State'].get('Status'), 'oom_killed': info['State'].get('OOMKilled'),
+                                   'started_at': info['State'].get('StartedAt'), 'restart_count': info.get('RestartCount')},
+                         'config': {key: env[key] for key in allowed if key in env}, 'versions': version,
                          'limits': {key: info['HostConfig'].get(key) for key in
                                     ('Memory', 'MemorySwap', 'NanoCpus', 'CpuQuota', 'CpuPeriod', 'CpusetCpus')}})
     emit({'timestamp': time.time(), 'utc': datetime.datetime.now(datetime.timezone.utc).isoformat(),
@@ -66,15 +123,16 @@ if '--metadata' in sys.argv:
           'os_release': command('cat', '/etc/os-release'), 'kernel': command('uname', '-a'),
           'lscpu': command('lscpu'), 'disk': command('df', '-B1', '/'),
           'docker_version': docker('/version'), 'compose_version': command('docker', 'compose', 'version'),
-          'remote_commit': command('git', '-C', '/home/loql/dacs_mushroom_backend', 'rev-parse', 'HEAD'),
-          'remote_git_status': command('git', '-C', '/home/loql/dacs_mushroom_backend', 'status', '--short'),
+          'remote_commit': command('git', '-C', repo, 'rev-parse', 'HEAD'),
+          'remote_git_status': command('git', '-C', repo, 'status', '--short'),
+          'process_limits': command('cat', '/proc/self/limits'),
           'containers': services})
     sys.exit(0)
 
 containers = [c for c in docker('/containers/json')
-              if c.get('Labels', {}).get('com.docker.compose.project') == 'dacs-mushroom']
+              if c.get('Labels', {}).get('com.docker.compose.project') == project]
 if not containers:
-    raise RuntimeError('No running containers in dacs-mushroom project')
+    raise RuntimeError('No running containers in Compose project %s' % project)
 emit({'type': 'collector', 'timestamp': time.time(), 'interval_seconds': 1,
       'cpu_count': os.cpu_count(), 'containers': [c['Names'][0].lstrip('/') for c in containers],
       'cpu_definition': 'host: 100*(delta total - delta idle - delta iowait)/delta total; container: Docker CPU delta normalized to one core',
@@ -82,7 +140,7 @@ emit({'type': 'collector', 'timestamp': time.time(), 'interval_seconds': 1,
 previous_host = host_cpu()
 previous_containers = {}
 deadline = time.monotonic()
-expires = deadline + 1800
+expires = deadline + duration if duration > 0 else float('inf')
 while time.monotonic() < expires:
     current_host = host_cpu()
     delta = current_host[0] - previous_host[0]
@@ -92,8 +150,14 @@ while time.monotonic() < expires:
     host['steal_percent'] = 100 * (current_host[3] - previous_host[3]) / delta if delta else None
     host['memory_used_bytes'] = host['MemTotal'] - host['MemAvailable']
     host['swap_used_bytes'] = host['SwapTotal'] - host['SwapFree']
+    try: host['io'] = host_io()
+    except (OSError, ValueError, IndexError): host['io'] = None
     previous_host = current_host
     emit({'type': 'host', 'timestamp': time.time(), **host})
+    current_containers = [c for c in docker('/containers/json') if c.get('Labels', {}).get('com.docker.compose.project') == project]
+    if {c['Id'] for c in current_containers} != {c['Id'] for c in containers}:
+        emit({'type': 'container_change', 'timestamp': time.time(), 'services': [c['Labels'].get('com.docker.compose.service') for c in current_containers]})
+        containers = current_containers
     for container in containers:
         try:
             stats = docker('/containers/%s/stats?stream=false&one-shot=true' % container['Id'])
@@ -111,7 +175,8 @@ while time.monotonic() < expires:
                   'name': container['Names'][0].lstrip('/'),
                   'service': container['Labels']['com.docker.compose.service'],
                   'cpu_percent': percent, 'memory_used_bytes': max(0, mem.get('usage', 0) - cache),
-                  'memory_usage_bytes': mem.get('usage', 0), 'memory_limit_bytes': mem.get('limit', 0)})
+                  'memory_usage_bytes': mem.get('usage', 0), 'memory_limit_bytes': mem.get('limit', 0),
+                  'networks': stats.get('networks', {}), 'blkio': stats.get('blkio_stats', {})})
         except Exception as error:
             emit({'type': 'error', 'timestamp': time.time(), 'container': container['Id'], 'error': str(error)})
     deadline += 1

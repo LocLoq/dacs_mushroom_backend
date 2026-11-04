@@ -1,0 +1,13 @@
+{
+  "uid": "mushroom-k6", "title": "Mushroom mixed workload", "schemaVersion": 39, "version": 1,
+  "refresh": "5s", "time": {"from": "now-1h", "to": "now"},
+  "templating": {"list": [{"name": "run", "type": "query", "datasource": {"type": "prometheus", "uid": "benchmark-prometheus"}, "query": "label_values(k6_business_requests_total, benchmark_run)", "refresh": 1}]},
+  "panels": [
+    {"id": 1, "title": "Active VUs", "type": "timeseries", "gridPos": {"h": 8, "w": 12, "x": 0, "y": 0}, "datasource": {"type": "prometheus", "uid": "benchmark-prometheus"}, "targets": [{"expr": "k6_vus{benchmark_run=\"$run\",test_phase=\"measured\"}", "legendFormat": "VU"}]},
+    {"id": 2, "title": "Requests/s by role", "type": "timeseries", "gridPos": {"h": 8, "w": 12, "x": 12, "y": 0}, "datasource": {"type": "prometheus", "uid": "benchmark-prometheus"}, "targets": [{"expr": "sum by (role) (rate(k6_business_requests_total{benchmark_run=\"$run\",test_phase=\"measured\"}[1m]))", "legendFormat": "{{role}}"}]},
+    {"id": 3, "title": "HTTP p95 by endpoint", "type": "timeseries", "gridPos": {"h": 8, "w": 12, "x": 0, "y": 8}, "datasource": {"type": "prometheus", "uid": "benchmark-prometheus"}, "targets": [{"expr": "k6_http_req_duration_p95{benchmark_run=\"$run\",test_phase=\"measured\",phase=\"business\"}", "legendFormat": "{{role}} {{endpoint}}"}]},
+    {"id": 4, "title": "Failures/s by reason", "type": "timeseries", "gridPos": {"h": 8, "w": 12, "x": 12, "y": 8}, "datasource": {"type": "prometheus", "uid": "benchmark-prometheus"}, "targets": [{"expr": "sum by (role, reason) (rate(k6_business_failures_total{benchmark_run=\"$run\",test_phase=\"measured\"}[1m]))", "legendFormat": "{{role}} {{reason}}"}]},
+    {"id": 5, "title": "Classifier jobs/s", "type": "timeseries", "gridPos": {"h": 8, "w": 12, "x": 0, "y": 16}, "datasource": {"type": "prometheus", "uid": "benchmark-prometheus"}, "targets": [{"expr": "sum by (role, outcome) (rate(k6_classifier_jobs_total{benchmark_run=\"$run\",test_phase=\"measured\"}[1m]))", "legendFormat": "{{role}} {{outcome}}"}]},
+    {"id": 6, "title": "Realtime events/s", "type": "timeseries", "gridPos": {"h": 8, "w": 12, "x": 12, "y": 16}, "datasource": {"type": "prometheus", "uid": "benchmark-prometheus"}, "targets": [{"expr": "sum by (namespace, event) (rate(k6_socket_events_total{benchmark_run=\"$run\",test_phase=\"measured\"}[1m]))", "legendFormat": "{{namespace}} {{event}}"}]}
+  ]
+}

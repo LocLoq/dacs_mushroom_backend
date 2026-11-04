@@ -10,9 +10,9 @@ node scripts/migrate-staff-workflow.cjs
 npm run prisma:generate
 ```
 
-Migration thêm sáu bảng, ba cột classifier và mở rộng action_type lên 255 ký tự, có thể chạy lại. Không suy ra quyền từ công việc cũ. Admin cần thêm staff vào cơ sở rồi phân công từng lô. Khi thu hồi cơ sở, phân công các lô thuộc cơ sở cũng bị gỡ; công việc và minh chứng giữ nguyên. Admin/manager có thể hủy hoặc chuyển người nhận sang nhân viên đủ quyền.
+Migration thêm sáu bảng, ba cột classifier và mở rộng action_type lên 255 ký tự, có thể chạy lại. Không suy ra quyền từ công việc cũ. Admin hoặc manager của cơ sở có thể thêm staff vào cơ sở rồi phân công từng lô. Khi thu hồi cơ sở, phân công các lô thuộc cơ sở cũng bị gỡ; công việc và minh chứng giữ nguyên. Admin/manager có thể hủy hoặc chuyển người nhận sang nhân viên đủ quyền.
 
-Staff được xem lô được giao, ghi chăm sóc/sinh trưởng/thu hoạch, hoàn tất qua thu hoạch và PUT chỉ trường `status`. Staff chỉ sửa sinh trưởng do mình tạo. Admin/manager quản lý thông tin, tạo/xóa lô; chỉ admin cấp quyền.
+Staff được xem lô được giao, ghi chăm sóc/sinh trưởng/thu hoạch, hoàn tất qua thu hoạch và PUT chỉ trường `status`. Staff chỉ sửa sinh trưởng do mình tạo. Admin/manager quản lý thông tin, tạo/xóa lô và cấp quyền staff trong phạm vi cơ sở; chỉ admin cấp quyền manager. Manager tạo cơ sở mới được tự động gán quản lý cơ sở đó.
 
 ## API bổ sung
 
@@ -20,10 +20,10 @@ Các API dùng Bearer JWT, trừ snapshot classifier.
 
 | API | Nội dung |
 | --- | --- |
-| GET /api/production-facilities/:id/staff | Admin xem nhân viên của cơ sở, có page/limit/search |
-| POST /api/production-facilities/:id/staff | Admin thêm nhân viên, JSON {userId} |
+| GET /api/production-facilities/:id/staff | Admin/manager xem nhân viên của cơ sở, có page/limit/search |
+| POST /api/production-facilities/:id/staff | Admin/manager thêm nhân viên, JSON {userId} |
 | DELETE /api/production-facilities/:id/staff/:userId | Thu hồi cơ sở và các phân công lô thuộc cơ sở |
-| GET/POST /api/cultivation-batches/:id/staff | Admin xem/giao nhân viên; POST JSON {userId}, phải thuộc cơ sở |
+| GET/POST /api/cultivation-batches/:id/staff | Admin/manager xem/giao nhân viên; POST JSON {userId}, phải thuộc cơ sở |
 | DELETE /api/cultivation-batches/:id/staff/:userId | Thu hồi lô, giữ lịch sử công việc |
 | GET /api/dashboard/task-assignees?batchId=... | Admin/manager chọn người nhận đủ quyền lô |
 | GET /api/notifications | page/limit/unread=true; trả {data,pagination,unreadCount} |
@@ -36,7 +36,7 @@ Các API dùng Bearer JWT, trừ snapshot classifier.
 
 Staff luôn chỉ nhận công việc của chính mình, dù gửi assigneeUserId của người khác. Mặc định TODO/IN_PROGRESS; status=PENDING_REVIEW hoặc ALL dùng để xem chờ duyệt/lịch sử. Công việc gắn lô bị thu hồi quyền không xuất hiện và chi tiết trả 403. Công việc không gắn lô vẫn dùng quyền người nhận. Snapshot classifier chỉ trả id/status/result/attempt/maxAttempts/nextRetryAt và thời gian; không trả userId/inputPath hoặc lỗi kỹ thuật nội bộ.
 
-POST care-logs giữ JSON cũ và nhận multipart: actionType, notes, recordedAt, images. Ảnh không bắt buộc; tối đa 5 JPEG/PNG/WebP, 5 MiB mỗi ảnh. Response nhật ký có images. Các mã sẵn: WATERING, FERTILIZING, CLEANING, VENTILATION, PEST_CONTROL; hành động khác vẫn lưu chuỗi tự do. Ảnh chăm sóc là riêng tư, tải bằng JWT và quyền lô; snapshot minh chứng giữ ảnh sau khi bản ghi/lô bị xóa.
+POST care-logs giữ JSON cũ và nhận multipart: actionType, notes, recordedAt, images. Ảnh không bắt buộc; tối đa 5 JPEG/PNG/WebP, 5 MiB mỗi ảnh. Response tạo và danh sách nhật ký đều có images, mảng rỗng khi không có ảnh. Các mã sẵn: WATERING, FERTILIZING, CLEANING, VENTILATION, PEST_CONTROL; hành động khác vẫn lưu chuỗi tự do. Ảnh chăm sóc là riêng tư, tải bằng JWT và quyền lô; snapshot minh chứng giữ ảnh sau khi bản ghi/lô bị xóa.
 
 ## WebSocket và refresh
 

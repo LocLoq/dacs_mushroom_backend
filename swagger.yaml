@@ -1934,6 +1934,7 @@ paths:
           $ref: '#/components/responses/ApiError'
     post:
       summary: 'Thêm cơ sở sản xuất mới'
+      description: 'Admin và manager được tạo cơ sở. Manager tạo cơ sở tự động được phân quyền quản lý cơ sở đó.'
       tags:
         - 'Quản lý Cơ Sở Sản Xuất'
       requestBody:
@@ -2250,7 +2251,7 @@ paths:
           description: 'ID của lô nuôi trồng'
       responses:
         '200':
-          description: 'Danh sách nhật ký chấm sóc'
+          description: 'Danh sách nhật ký chăm sóc; mỗi bản ghi có mảng images, rỗng khi không có ảnh. Ảnh riêng tư yêu cầu Bearer token và quyền truy cập lô.'
         default:
           $ref: '#/components/responses/ApiError'
     post:
@@ -4965,7 +4966,7 @@ paths:
           $ref: '#/components/responses/ApiError'
   '/api/production-facilities/{id}/staff':
     get:
-      summary: 'Admin xem phân công hoặc nhân viên có thể thêm'
+      summary: 'Admin hoặc manager xem phân công hoặc nhân viên có thể thêm'
       tags:
         - 'Công việc và thông báo'
       responses:
@@ -5006,7 +5007,7 @@ paths:
             type: boolean
             default: false
     post:
-      summary: 'Admin thêm một hoặc nhiều nhân viên trong một transaction'
+      summary: 'Admin hoặc manager thêm một hoặc nhiều nhân viên trong một transaction'
       tags:
         - 'Công việc và thông báo'
       responses:
@@ -5093,7 +5094,7 @@ paths:
             type: integer
   '/api/cultivation-batches/{id}/staff':
     get:
-      summary: 'Admin xem phân công hoặc nhân viên có thể thêm'
+      summary: 'Admin hoặc manager xem phân công hoặc nhân viên có thể thêm'
       tags:
         - 'Công việc và thông báo'
       responses:
@@ -5134,7 +5135,7 @@ paths:
             type: boolean
             default: false
     post:
-      summary: 'Admin thêm một hoặc nhiều nhân viên trong một transaction'
+      summary: 'Admin hoặc manager thêm một hoặc nhiều nhân viên trong một transaction'
       tags:
         - 'Công việc và thông báo'
       responses:

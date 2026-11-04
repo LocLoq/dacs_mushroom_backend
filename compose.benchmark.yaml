@@ -1,0 +1,19 @@
+name: dacs-mushroom-benchmark
+
+services:
+  db:
+    environment:
+      MARIADB_DATABASE: ${BENCHMARK_DATABASE:?Set BENCHMARK_DATABASE to a benchmark_ database}
+    entrypoint: ["sh", "-c", "case \"$$MARIADB_DATABASE\" in benchmark_?*) ;; *) echo 'Database must start with benchmark_ and have a suffix' >&2; exit 1 ;; esac; case \"$$MARIADB_DATABASE\" in *[!a-z0-9_]*) echo 'Invalid benchmark database name' >&2; exit 1 ;; esac; exec /usr/local/bin/docker-entrypoint.sh mariadbd"]
+  db-init:
+    image: dacs-mushroom-api:benchmark
+    build:
+      target: benchmark
+    environment:
+      DATABASE_NAME: ${BENCHMARK_DATABASE:?Set BENCHMARK_DATABASE to a benchmark_ database}
+  api:
+    image: dacs-mushroom-api:benchmark
+    build:
+      target: benchmark
+    environment:
+      DATABASE_NAME: ${BENCHMARK_DATABASE:?Set BENCHMARK_DATABASE to a benchmark_ database}

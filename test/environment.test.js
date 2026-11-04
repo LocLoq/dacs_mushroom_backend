@@ -5,6 +5,7 @@ const { tmpdir } = require('node:os');
 const path = require('node:path');
 const { loadEnvironment, getDatabaseUrl } = require('../config/environment.cjs');
 const { classifierConfig, retryDelay } = require('../config/classifier.cjs');
+const { runtimeMode } = require('../config/runtime-mode.cjs');
 
 test('injected environment works without a local env file', () => {
     const directory = mkdtempSync(path.join(tmpdir(), 'mushroom-env-'));
@@ -56,4 +57,16 @@ test('classifier configuration validates overrides and preserves retry and watch
     for (const value of ['0', '-1', 'abc', '1.5', '']) {
         assert.throws(() => classifierConfig({ CLASSIFIER_JOB_ATTEMPTS: value }));
     }
+});
+
+test('runtime image mode defaults to production and rejects invalid markers', () => {
+    const directory = mkdtempSync(path.join(tmpdir(), 'mushroom-mode-'));
+    const file = path.join(directory, 'mode.json');
+    try {
+        assert.equal(runtimeMode(file), 'production');
+        writeFileSync(file, '{"mode":"benchmark"}');
+        assert.equal(runtimeMode(file), 'benchmark');
+        writeFileSync(file, '{"mode":"unexpected"}');
+        assert.throws(() => runtimeMode(file), /Invalid runtime image mode/);
+    } finally { unlinkSync(file); rmdirSync(directory); }
 });

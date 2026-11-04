@@ -1,233 +1,320 @@
-"""Sanitize k6 summaries, aggregate three repetitions, and plot original measurements."""
+"""Summarize mixed-workload k6 and SSH resource artifacts without exposing tokens."""
 import csv
 import datetime as dt
-import hashlib
 import json
 import math
 from pathlib import Path
 import re
 import statistics
 import sys
+import hashlib
 
-ROOT = Path(sys.argv[1] if len(sys.argv) > 1 else 'benchmarks/results/2026-10-01-local')
-MIB = 1024 ** 2
+if len(sys.argv) != 2:
+    raise SystemExit('Usage: python analyze-results.py RESULTS_DIR')
+root = Path(sys.argv[1])
+metadata = json.loads((root / 'metadata.json').read_text(encoding='utf-8'))
+if metadata.get('profile') not in ('smoke', 'full'):
+    raise SystemExit('This analyzer expects a mixed-workload benchmark')
 
-
-def load(path):
-    return json.loads(path.read_text(encoding='utf-8'))
-
-
-def write_json(name, value):
-    (ROOT / name).write_text(json.dumps(value, ensure_ascii=False, indent=2), encoding='utf-8')
-
+def load_summary(phase):
+    file = root / (phase + '.summary.json')
+    if not file.exists():
+        return {}
+    try:
+        data = json.loads(file.read_text(encoding='utf-8'))
+    except (ValueError, OSError):
+        return {}
+    data.pop('setup_data', None)
+    return data.get('metrics', {})
 
 def epoch(value):
     return dt.datetime.fromisoformat(value.replace('Z', '+00:00')).timestamp()
 
+def values(metric):
+    return metric.get('values', {})
 
-def stats(values):
-    values = [v for v in values if v is not None and math.isfinite(v)]
-    return {'count': len(values), 'mean': statistics.mean(values),
-            'median': statistics.median(values), 'min': min(values), 'max': max(values)} if values else None
+def finite(values):
+    return [v for v in values if isinstance(v, (int, float)) and math.isfinite(v)]
 
+def describe(items):
+    items = finite(items)
+    return {'samples': len(items), 'mean': statistics.mean(items), 'max': max(items)} if items else None
 
-metadata = load(ROOT / 'metadata.json')
-if not metadata.get('finished_at'):
-    raise RuntimeError('Benchmark is incomplete; do not publish final results')
-measured = [r for r in metadata['runs'] if r['id'] != 'warmup']
-if len(measured) != 12 or any('finished_at' not in r for r in measured):
-    raise RuntimeError('Expected twelve completed measured runs')
+def method(endpoint):
+    if endpoint in {'facility_update', 'batch_update', 'species_update', 'admin_user_update'}:
+        return 'PUT'
+    if endpoint in {'task_update', 'expense_update', 'sale_update', 'gallery_update', 'notification_read'}:
+        return 'PATCH'
+    if endpoint.endswith('_delete') or endpoint.endswith('_revoke'):
+        return 'DELETE'
+    if endpoint.endswith('_create') or endpoint.endswith('_grant') or endpoint in {'classifier_submit', 'task_submit', 'task_review', 'gallery_upload'}:
+        return 'POST'
+    return 'GET'
 
-# Preserve exact script provenance for this session's output-only compatibility fixes.
-versions_path = ROOT / 'script-versions.json'
-if versions_path.exists():
-    versions = load(versions_path)
-    metadata['generator'].setdefault('initial_script_sha256', metadata['generator']['script_sha256'])
-    metadata['generator']['script_sha256'] = versions['final_script_sha256']
-    for run in metadata['runs']:
-        run['script_sha256'] = (versions['warmup_sha256'] if run['id'] == 'warmup' else
-                                versions['measured_script_sha256'] if run['id'] == 'vu10-r1' else
-                                versions['final_script_sha256'])
-    write_json('metadata.json', metadata)
-
-# Legacy k6 embeds setup return data. Remove tokens before any artifact is published.
-for summary_path in ROOT.glob('*.summary.json'):
-    summary = load(summary_path)
-    summary.pop('setup_data', None)
-    summary_path.write_text(json.dumps(summary, indent=2), encoding='utf-8')
-for log_path in ROOT.glob('*.log'):
-    text = log_path.read_text(encoding='utf-8')
-    text = re.sub(r'"token"\s*:\s*"[^"]*"', '"token": "[REDACTED]"', text)
-    log_path.write_text(text, encoding='utf-8')
-
-resources = [json.loads(line) for line in (ROOT / 'resources.ndjson').read_text(encoding='utf-8').splitlines() if line]
-errors = [r for r in resources if r['type'] == 'error']
-if errors:
-    raise RuntimeError('Resource collection errors: %s' % len(errors))
-offset = metadata['clock_offset_ms'] / 1000
-host_samples = [r for r in resources if r['type'] == 'host']
-intervals = [b['timestamp'] - a['timestamp'] for a, b in zip(host_samples, host_samples[1:])]
-
-
-def resource_stats(start, end):
-    selected = [r for r in resources if start <= r.get('timestamp', 0) <= end]
-    output = {}
-    for name in ('host', 'api', 'db', 'redis', 'classifier'):
-        samples = [r for r in selected if r['type'] == 'host'] if name == 'host' else [
-            r for r in selected if r['type'] == 'container' and r['service'] == name]
-        if len(samples) < 10:
-            raise RuntimeError('Too few resource samples for %s' % name)
-        output[name] = {'samples': len(samples), 'cpu_percent': stats([r['cpu_percent'] for r in samples]),
-                        'memory_mib': stats([r['memory_used_bytes'] / MIB for r in samples])}
-        if name == 'host':
-            output[name]['swap_mib'] = stats([r['swap_used_bytes'] / MIB for r in samples])
-            output[name]['iowait_percent'] = stats([r['iowait_percent'] for r in samples])
-            output[name]['steal_percent'] = stats([r['steal_percent'] for r in samples])
-    return output
-
-
+metrics = load_summary('measured')
+preflight = load_summary('preflight')
 rows = []
-per_run_resources = {}
-all_thresholds_passed = True
-for run in measured:
-    summary = load(ROOT / (run['id'] + '.summary.json'))
-    metrics = summary['metrics']
-    latency = metrics['http_req_duration{phase:business}']['values']
-    count = metrics['business_requests']['values']['count']
-    checks = metrics['checks{phase:business}']['values']
-    log = (ROOT / (run['id'] + '.log')).read_text(encoding='utf-8')
-    dataset = int(re.search(r'Dataset: (\d+) batches', log).group(1))
-    ok = all(t['ok'] for m in metrics.values() for t in m.get('thresholds', {}).values())
-    all_thresholds_passed &= ok
-    if run['exit_code'] != (0 if ok else 99):
-        raise RuntimeError('Threshold status and exit code differ')
-    if checks['passes'] + checks['fails'] != 2 * count:
-        raise RuntimeError('Missing business checks')
-    start = epoch(run['started_at']) + offset
-    end = epoch(run['finished_at']) + offset
-    resource = resource_stats(start, end)
-    per_run_resources[run['id']] = resource
-    rows.append({'run': run['id'], 'vus': run['vus'], 'batches': dataset,
-                 'duration_s': run['duration_seconds'], 'business_requests': count,
-                 'k6_elapsed_s': summary['state']['testRunDurationMs'] / 1000,
-                 'avg_ms': latency['avg'], 'p50_ms': latency['med'], 'p95_ms': latency['p(95)'],
-                 'p99_ms': latency['p(99)'], 'max_ms': latency['max'],
-                 'requests_per_s': metrics['business_requests']['values']['rate'],
-                 'http_errors_pct': metrics['http_req_failed{phase:business}']['values']['rate'] * 100,
-                 'checks_passed_pct': checks['rate'] * 100, 'thresholds_passed': ok,
-                 'host_cpu_mean_pct': resource['host']['cpu_percent']['mean'],
-                 'host_cpu_max_pct': resource['host']['cpu_percent']['max'],
-                 'host_ram_mean_mib': resource['host']['memory_mib']['mean'],
-                 'host_ram_max_mib': resource['host']['memory_mib']['max'],
-                 'api_cpu_mean_pct': resource['api']['cpu_percent']['mean'],
-                 'api_ram_mean_mib': resource['api']['memory_mib']['mean']})
-
-if {r['batches'] for r in rows} != {100}:
-    raise RuntimeError('Unexpected dataset size')
-with (ROOT / 'runs.csv').open('w', encoding='utf-8', newline='') as output:
-    writer = csv.DictWriter(output, fieldnames=rows[0].keys())
+pattern = re.compile(r'^business_requests\{endpoint:([^,]+),role:([^}]+)\}$')
+for key, metric in metrics.items():
+    match = pattern.match(key)
+    if not match:
+        continue
+    endpoint, role = match.groups()
+    count = values(metric).get('count', 0)
+    if not count:
+        continue
+    latency = values(metrics.get(f'http_req_duration{{endpoint:{endpoint},role:{role}}}', {}))
+    rows.append({'role': role, 'method': method(endpoint), 'endpoint': endpoint, 'requests': count,
+                 'avg_ms': latency.get('avg'), 'p50_ms': latency.get('med'),
+                 'p95_ms': latency.get('p(95)'), 'p99_ms': latency.get('p(99)')})
+rows.sort(key=lambda row: (row['role'], row['endpoint']))
+with (root / 'endpoints.csv').open('w', encoding='utf-8', newline='') as output:
+    writer = csv.DictWriter(output, fieldnames=['role', 'method', 'endpoint', 'requests', 'avg_ms', 'p50_ms', 'p95_ms', 'p99_ms'])
     writer.writeheader()
     writer.writerows(rows)
 
-groups = []
-for vus in metadata['protocol']['vus']:
-    subset = [r for r in rows if r['vus'] == vus]
-    group = {'vus': vus, 'repeats': len(subset), 'requests_total': sum(r['business_requests'] for r in subset)}
-    for key in ('p50_ms', 'p95_ms', 'p99_ms', 'requests_per_s', 'http_errors_pct', 'checks_passed_pct'):
-        group[key] = stats([r[key] for r in subset])
-    group['resources'] = {}
+coverage = []
+for key, metric in preflight.items():
+    match = pattern.match(key)
+    if match and values(metric).get('count', 0):
+        coverage.append({'endpoint': match.group(1), 'method': method(match.group(1)), 'role': match.group(2), 'requests': values(metric)['count']})
+coverage.sort(key=lambda row: (row['role'], row['endpoint']))
+with (root / 'coverage.csv').open('w', encoding='utf-8', newline='') as output:
+    writer = csv.DictWriter(output, fieldnames=['role', 'method', 'endpoint', 'requests'])
+    writer.writeheader()
+    writer.writerows(coverage)
+
+failures = {}
+for reason in ('rate_limit', 'auth', 'server', 'network', 'response'):
+    failures[reason] = values(metrics.get(f'business_failures{{reason:{reason}}}', {})).get('count', 0)
+action_counts = {}
+job_outcomes = {}
+for role in ('admin', 'manager', 'staff', 'guest'):
+    action_counts[role] = {action: values(metrics.get(f'business_actions{{action:{action},role:{role}}}', {})).get('count', 0)
+                           for action in ('read', 'write', 'classify')}
+    job_outcomes[role] = {outcome: values(metrics.get(f'classifier_jobs{{outcome:{outcome},role:{role}}}', {})).get('count', 0)
+                          for outcome in ('succeeded', 'failed', 'timeout', 'rejected', 'invalid')}
+resource_summary = {}
+resource_file = root / 'resources.ndjson'
+resources = []
+run = next((row for row in metadata.get('runs', []) if row['id'] == 'measured'), None)
+if resource_file.exists() and run and run.get('finished_at'):
+    for line in resource_file.read_text(encoding='utf-8').splitlines():
+        try: resources.append(json.loads(line))
+        except ValueError: continue
+    offset = metadata.get('clock_offset_ms', 0) / 1000
+    start, end = epoch(run['started_at']) + offset, epoch(run['finished_at']) + offset
     for service in ('host', 'api', 'db', 'redis', 'classifier'):
-        matched = [r for r in resources if any(
-            epoch(run['started_at']) + offset <= r.get('timestamp', 0) <= epoch(run['finished_at']) + offset
-            for run in measured if run['vus'] == vus)]
-        samples = [r for r in matched if r['type'] == 'host'] if service == 'host' else [
-            r for r in matched if r['type'] == 'container' and r['service'] == service]
-        group['resources'][service] = {'samples': len(samples),
-            'cpu_percent': stats([r['cpu_percent'] for r in samples]),
-            'memory_mib': stats([r['memory_used_bytes'] / MIB for r in samples])}
-    groups.append(group)
+        selected = [row for row in resources if start <= row.get('timestamp', 0) <= end and
+                    (row.get('type') == 'host' if service == 'host' else row.get('type') == 'container' and row.get('service') == service)]
+        resource_summary[service] = {'cpu_percent': describe([row.get('cpu_percent') for row in selected]),
+                                     'memory_mib': describe([row.get('memory_used_bytes', 0) / 1048576 for row in selected])}
+    resource_summary['collection_errors'] = sum(row.get('type') == 'error' for row in resources)
 
-baseline = resource_stats(epoch(metadata['baseline_started_at']) + offset,
-                          epoch(metadata['baseline_finished_at']) + offset)
-analysis = {'groups': groups, 'runs': rows, 'resources_by_run': per_run_resources,
-            'baseline': baseline, 'sample_interval_s': stats(intervals),
-            'all_thresholds_passed': all_thresholds_passed,
-            'total_business_requests': sum(r['business_requests'] for r in rows),
-            'resource_errors': len(errors), 'resource_window': 'SSH-corrected wrapper start/end; includes login, data probe and graceful drain',
-            'aggregation': 'HTTP table: median and min/max across 3 run statistics (not a pooled percentile); CPU/RAM: arithmetic mean and peak of 1s samples pooled across measured windows'}
-write_json('analysis.json', analysis)
-write_json('source-sha256.json', {p.name: hashlib.sha256(p.read_bytes()).hexdigest()
-                                for p in sorted(Path(__file__).parent.iterdir()) if p.is_file()})
+def metric_values(name):
+    return values(metrics.get(name, {}))
 
-lines = ['# Benchmark 2026-10-01', '', '12 measured runs; 100 batches; 60 seconds per run; 1 second think time.', '',
-         '| VU | p95 median [min, max] ms | p99 median [min, max] ms | RPS median [min, max] | Error % | Checks % |',
-         '| ---: | ---: | ---: | ---: | ---: | ---: |']
-def range_text(value):
-    return '%.2f [%.2f, %.2f]' % (value['median'], value['min'], value['max'])
-for group in groups:
-    lines.append('| %s | %s | %s | %s | %.2f | %.2f |' % (
-        group['vus'], range_text(group['p95_ms']), range_text(group['p99_ms']),
-        range_text(group['requests_per_s']), group['http_errors_pct']['max'], group['checks_passed_pct']['min']))
-lines += ['', '## Server resources', '', '| VU | Service | CPU mean / peak % | RAM mean / peak MiB | Samples |',
-          '| ---: | --- | ---: | ---: | ---: |']
-for group in groups:
-    for service, value in group['resources'].items():
-        lines.append('| %s | %s | %.2f / %.2f | %.2f / %.2f | %s |' % (
-            group['vus'], service, value['cpu_percent']['mean'], value['cpu_percent']['max'],
-            value['memory_mib']['mean'], value['memory_mib']['max'], value['samples']))
-(ROOT / 'summary.md').write_text('\n'.join(lines) + '\n', encoding='utf-8')
+thresholds = {name: metric.get('thresholds') for name, metric in metrics.items() if metric.get('thresholds')}
+analysis = {'profile': metadata['profile'], 'mode': metadata['mode'], 'roles': metadata['roles'],
+            'requests': metric_values('business_requests'), 'http_failed': metric_values('http_req_failed{phase:business}'),
+            'checks': metric_values('checks{phase:business}'), 'read_latency_ms': metric_values('http_req_duration{phase:business,kind:read}'),
+            'failure_reasons': failures, 'action_counts': action_counts, 'classifier_outcomes': job_outcomes, 'classifier_jobs': metric_values('classifier_jobs'),
+            'classifier_success': metric_values('classifier_success'), 'classifier_queue_ms': metric_values('classifier_queue_ms'),
+            'classifier_processing_ms': metric_values('classifier_processing_ms'), 'classifier_total_ms': metric_values('classifier_total_ms'),
+            'socket_events': metric_values('socket_events'), 'resources': resource_summary,
+            'thresholds': thresholds, 'preflight_coverage': coverage, 'endpoints': rows,
+            'measurement_window': 'measured wrapper start to exit; includes graceful job drain'}
 
-import matplotlib
-matplotlib.use('Agg')
-import matplotlib.pyplot as plt
+missing = []
+def require(condition, description):
+    if not condition: missing.append(description)
 
-plt.rcParams.update({'font.size': 10, 'axes.spines.top': False, 'axes.spines.right': False})
-fig, axes = plt.subplots(1, 2, figsize=(11, 4), layout='constrained')
-x = [g['vus'] for g in groups]
-for name, label, color in [('p95_ms', 'p95', '#1565c0'), ('p99_ms', 'p99', '#d55e00')]:
-    med = [g[name]['median'] for g in groups]
-    axes[0].errorbar(x, med, yerr=[[g[name]['median'] - g[name]['min'] for g in groups],
-                                  [g[name]['max'] - g[name]['median'] for g in groups]],
-                     marker='o', capsize=4, color=color, label=label)
-axes[0].set(xlabel='Virtual users (VU)', ylabel='HTTP latency (ms)', title='Median of 3 runs; bars = min/max')
-axes[0].legend()
-med = [g['requests_per_s']['median'] for g in groups]
-axes[1].errorbar(x, med, yerr=[[g['requests_per_s']['median'] - g['requests_per_s']['min'] for g in groups],
-                              [g['requests_per_s']['max'] - g['requests_per_s']['median'] for g in groups]],
-                 marker='o', capsize=4, color='#00796b')
-axes[1].set(xlabel='Virtual users (VU)', ylabel='Business requests / second', title='GET list batches; sleep(1); 60s/run')
-for axis in axes:
-    axis.set_xticks(x)
-    axis.grid(alpha=0.25)
-fig.savefig(ROOT / 'performance.png', dpi=180)
-plt.close(fig)
+require(metadata.get('schema_version') == 2, 'Metadata phiên bản 2 và nguồn thu thập')
+require(not metadata.get('incomplete') and metadata.get('finished_at'), 'Lượt đo hoàn tất')
+for phase in ('preflight', 'warmup', 'measured'):
+    record = next((row for row in metadata.get('runs', []) if row.get('id') == phase), {})
+    require(record.get('exit_code') in ((0, 99) if phase == 'measured' else (0,)) and (root / (phase + '.summary.json')).exists(), 'Giai đoạn ' + phase)
+required_coverage = [metric for key, metric in preflight.items() if pattern.match(key) and 'count>0' in metric.get('thresholds', {})]
+require(bool(required_coverage) and all(metric.get('thresholds', {}).get('count>0', {}).get('ok') and values(metric).get('count', 0) > 0 for metric in required_coverage), 'Danh mục endpoint preflight bắt buộc')
+require(metadata.get('sampler') == 'ssh' and bool(metadata.get('server')), 'Snapshot và sampler server qua SSH')
+require(bool(metadata.get('server_after')), 'Snapshot server sau lượt đo')
+require(bool(metadata.get('effective_api')), 'Chế độ API hiệu lực được xác minh')
+for name in ('prometheus', 'grafana'):
+    require(metadata.get('monitoring', {}).get(name, {}).get('status') == 'ok', 'Phiên bản và trạng thái ' + name)
+require(bool(metadata.get('generator', {}).get('system')), 'Thông tin hệ thống máy sinh tải')
+require(bool(metadata.get('source_ip_count_declared')), 'Số IP nguồn')
+require(bool(metadata.get('generator', {}).get('k6')) and bool(metadata.get('generator', {}).get('script_sha256')), 'Phiên bản k6 và hash kịch bản')
+require(bool(metadata.get('generator', {}).get('seed_sha256')) and bool(metadata.get('generator', {}).get('image_sha256')), 'Hash seed và ảnh nhận diện')
+require(bool(metadata.get('server', {}).get('cpu_count')) and bool(metadata.get('server', {}).get('memory', {}).get('MemTotal')), 'CPU/RAM server')
+require(metadata.get('server', {}).get('os_release', {}).get('exit_code') == 0 and metadata.get('server', {}).get('disk', {}).get('exit_code') == 0, 'Hệ điều hành và ổ đĩa server')
+required_versions = {'api': ('runtime', 'npm', 'node_dependencies', 'source_hash', 'database_runtime', 'os_packages'),
+                     'db': ('server', 'os_packages'), 'redis': ('server', 'os_packages'),
+                     'classifier': ('python', 'python_dependencies', 'model_hashes', 'model_runtime', 'os_packages')}
+containers_by_service = {item.get('service'): item for item in metadata.get('server', {}).get('containers', [])}
+for service, names in required_versions.items():
+    item = containers_by_service.get(service, {})
+    require(bool(item.get('image_id')), 'Image thực chạy của ' + service)
+    for name in names:
+        result = item.get('versions', {}).get(name, {})
+        require(result.get('exit_code') == 0 and bool(result.get('stdout')), 'Phiên bản ' + service + '/' + name)
+for item in metadata.get('server', {}).get('containers', []):
+    if item.get('service') in ('api', 'db', 'redis', 'classifier'):
+        for name, result in item.get('versions', {}).items():
+            require(result.get('exit_code') == 0 and bool(result.get('stdout')), 'Phiên bản ' + item['service'] + '/' + name)
 
-fig, axes = plt.subplots(2, 1, figsize=(12, 7), sharex=True, layout='constrained')
-origin = epoch(metadata['baseline_started_at']) + offset
-for service, color in [('host', '#222222'), ('api', '#1565c0'), ('db', '#d55e00'),
-                       ('redis', '#00796b'), ('classifier', '#7b1fa2')]:
-    samples = [r for r in resources if r['type'] == 'host'] if service == 'host' else [
-        r for r in resources if r['type'] == 'container' and r['service'] == service]
-    xs = [(r['timestamp'] - origin) / 60 for r in samples]
-    axes[0].plot(xs, [r['cpu_percent'] for r in samples], label=service, color=color, linewidth=0.8, alpha=0.85)
-    axes[1].plot(xs, [r['memory_used_bytes'] / MIB for r in samples], label=service, color=color, linewidth=1)
-for vus, color in [(10, '#d9eaf7'), (25, '#e2efda'), (50, '#fff2cc'), (100, '#fce4d6')]:
-    runs = [r for r in measured if r['vus'] == vus]
-    start = (epoch(runs[0]['started_at']) + offset - origin) / 60
-    end = (epoch(runs[-1]['finished_at']) + offset - origin) / 60
-    for axis in axes:
-        axis.axvspan(start, end, color=color, alpha=0.4, zorder=-1)
-    axes[0].text((start + end) / 2, 1.01, '%s VU' % vus, transform=axes[0].get_xaxis_transform(), ha='center')
-axes[0].set(ylabel='CPU (%)')
-axes[0].set_title('SSH server samples (~1s); shaded windows include 5s gaps between repetitions', pad=28)
-axes[0].legend(ncol=5, loc='upper left')
-axes[1].set(xlabel='Minutes since baseline start', ylabel='Memory (MiB)')
-for axis in axes:
-    axis.grid(alpha=0.25)
-fig.savefig(ROOT / 'resources.png', dpi=180)
-plt.close(fig)
+def time_coverage(times, start, end, interval):
+    times = sorted(set(value for value in times if start <= value <= end))
+    if not times or end <= start: return {'fraction': 0, 'max_gap_seconds': None}
+    boundaries = [start] + times + [end]
+    gaps = [b - a for a, b in zip(boundaries, boundaries[1:])]
+    covered = sum(min(interval, gap) for gap in gaps)
+    return {'fraction': min(1, covered / (end - start)), 'max_gap_seconds': max(gaps)}
 
-manifest = {p.name: hashlib.sha256(p.read_bytes()).hexdigest() for p in sorted(ROOT.iterdir())
-            if p.is_file() and p.name != 'sha256.json'}
-write_json('sha256.json', manifest)
-print('\n'.join(lines))
+sampling = {}
+peak_vus, hold_seconds_10000 = None, None
+genrows = []
+if run and run.get('finished_at'):
+    start, end = epoch(run['started_at']), epoch(run['finished_at'])
+    offset = metadata.get('clock_offset_ms', 0) / 1000
+    sampling['server'] = time_coverage([r['timestamp'] - offset for r in resources if r.get('type') == 'host' and 'timestamp' in r], start, end, 1)
+    genfile = root / 'generator-resources.ndjson'
+    if genfile.exists():
+        for line in genfile.read_text(encoding='utf-8').splitlines():
+            try: genrows.append(json.loads(line))
+            except ValueError: continue
+    sampling['generator'] = time_coverage([r['timestamp'] for r in genrows if 'timestamp' in r and 'cpu_percent' in r], start, end, 1)
+    sampling['generator_io'] = time_coverage([r['timestamp'] for r in genrows if r.get('type') == 'io' and 'timestamp' in r], start, end, 5)
+    seriesfile = root / 'timeseries.json'
+    series = json.loads(seriesfile.read_text(encoding='utf-8')) if seriesfile.exists() else {}
+    for name in ('vus', 'rps', 'latency_p95', 'failures', 'classifier'):
+        require(name in series and 'error' not in series[name], 'Truy vấn Prometheus ' + name)
+    vus = series.get('vus', {}).get('result', [])
+    vu_points = [(float(pair[0]), float(pair[1])) for item in vus for pair in item.get('values', [])]
+    if vu_points:
+        peak_vus = max(value for _, value in vu_points)
+        if metadata.get('profile') == 'full':
+            hold_seconds_10000 = 5 * sum(start + 480 <= stamp < start + 2280 and value >= 10000 for stamp, value in vu_points)
+    sampling['prometheus_vus'] = time_coverage([float(pair[0]) for item in vus for pair in item.get('values', [])], start, end, 5)
+    for name, check in sampling.items():
+        require(check['fraction'] >= .95 and check['max_gap_seconds'] is not None and check['max_gap_seconds'] <= 15,
+                'Độ bao phủ dữ liệu thời gian ' + name + ' (>=95%, khoảng trống <=15 giây)')
+else:
+    require(False, 'Cửa sổ đo và dữ liệu thời gian')
+if any(row.get('type') in ('error', 'container_change') for row in resources):
+    require(False, 'Sampler không lỗi và container không thay đổi')
+before = metadata.get('server', {}).get('containers', [])
+after = metadata.get('server_after', {}).get('containers', [])
+if before and after:
+    identity = lambda items: sorted((item.get('service'), item.get('image_id'), item.get('state', {}).get('restart_count'), json.dumps(item.get('config', {}), sort_keys=True)) for item in items)
+    require(identity(before) == identity(after), 'Cấu hình/image/restart nhất quán trước và sau đo')
+
+core_threshold_names = ('http_req_duration{phase:business,kind:read}', 'http_req_failed{phase:business}', 'checks{phase:business}')
+core_thresholds = {name: thresholds.get(name) for name in core_threshold_names}
+performance = None if any(not item for item in core_thresholds.values()) else all(entry.get('ok') for item in core_thresholds.values() for entry in item.values())
+stage_latency = {stage: metric_values('http_req_duration{kind:read,phase:business,stage:' + stage + '}')
+                 for stage in ('ramp_1', 'ramp_2', 'ramp_3', 'ramp_4', 'hold', 'ramp_down', 'drain')}
+total_actions = sum(sum(row.values()) for row in action_counts.values())
+classifier_actions = sum(row['classify'] for row in action_counts.values())
+analysis.update({'performance_passed': performance, 'stage_read_latency_ms': stage_latency, 'sampling': sampling,
+                 'peak_vus': peak_vus, 'hold_seconds_at_10000_vus': hold_seconds_10000,
+                 'classifier_action_fraction': classifier_actions / total_actions if total_actions else None})
+readiness = {'schema_version': 2, 'ready': not missing, 'missing': missing, 'sampling': sampling,
+             'performance_passed': performance, 'profile': metadata.get('profile'), 'incomplete': bool(metadata.get('incomplete'))}
+versions = {'schema_version': 2, 'generator': metadata.get('generator', {}), 'monitoring': metadata.get('monitoring'),
+            'server_containers': [{k: c.get(k) for k in ('service', 'image', 'image_id', 'repo_digests', 'versions')} for c in before]}
+environment = {'schema_version': 2, 'server_before': metadata.get('server'), 'server_after': metadata.get('server_after'),
+               'generator': metadata.get('generator', {}).get('system'), 'effective_api': metadata.get('effective_api'),
+               'mode': metadata.get('mode'), 'rate_limits_declared': metadata.get('rate_limits_declared'), 'rate_limits_effective': metadata.get('rate_limits_effective'),
+               'roles': metadata.get('roles'), 'profile': metadata.get('profile'), 'runs': metadata.get('runs'),
+               'methodology': {'think_time_seconds': [2, 5], 'classifier_action_probability': .05,
+                               'classifier_deadline_ms': 900000, 'load_profile_minutes': [2, 2, 2, 2, 30, 2]}}
+for name, value in [('versions.json', versions), ('environment.json', environment), ('readiness.json', readiness)]:
+    (root / name).write_text(json.dumps(value, ensure_ascii=False, indent=2), encoding='utf-8')
+(root / 'readiness.md').write_text('# Kiểm tra dữ liệu báo cáo\n\n' + ('Đủ dữ liệu.\n' if not missing else 'Chưa đủ dữ liệu:\n\n' + ''.join('- ' + item + '\n' for item in missing)) +
+    '\nTrạng thái hiệu năng: ' + ('đạt' if performance is True else 'không đạt' if performance is False else 'chưa xác định') + '.\n', encoding='utf-8')
+(root / 'analysis.json').write_text(json.dumps(analysis, ensure_ascii=False, indent=2), encoding='utf-8')
+
+system = metadata.get('generator', {}).get('system', {})
+lines = ['# Báo cáo benchmark', '', f"- Đủ dữ liệu viết báo cáo: {'Có' if readiness['ready'] else 'Chưa'}; hiệu năng: {'đạt' if performance is True else 'không đạt' if performance is False else 'chưa xác định'}",
+         f"- Lần chạy: {metadata['run_id']} / {metadata['profile']} / {metadata['mode']}",
+         f"- Đích: {metadata.get('base_url', 'chưa biết')}; vai trò: {metadata.get('roles', {})}",
+         f"- IP nguồn: {metadata.get('source_ips', 'chưa biết')}; số IP khai báo: {metadata.get('source_ip_count_declared', 'chưa biết')}", f"- Rate limit khai báo: {metadata.get('rate_limits_declared', 'chưa biết')}; hiệu lực: {metadata.get('rate_limits_effective', 'chưa xác minh')}",
+         f"- Request: {analysis['requests'].get('count', 0)}; tỷ lệ lỗi HTTP: {analysis['http_failed'].get('rate', 'chưa có')}",
+         f"- Phân loại lỗi: {failures}; kiểm tra: {analysis['checks']}", f"- Job nhận diện: {analysis['classifier_jobs']}; thành công: {analysis['classifier_success']}",
+         f"- Thao tác theo vai trò: {action_counts}", f"- Job theo vai trò: {job_outcomes}",
+         f"- Số cặp vai trò/endpoint trong preflight: {len(coverage)}", '',
+         f"- VU quan sát tối đa: {peak_vus}; số giây giữ 10.000 VU theo mẫu 5 giây: {hold_seconds_10000}; tỷ lệ thao tác nhận diện: {analysis['classifier_action_fraction']}.",
+         '## Phiên bản và hệ thống', '',
+         f"- Máy sinh tải: {system.get('platform', 'chưa thu thập')} {system.get('release', '')}, {system.get('architecture', '')}; CPU {system.get('cpu_model', 'chưa thu thập')} ({system.get('cpu_count', '?')} luồng), RAM {system.get('total_memory_bytes', '?')} byte.",
+         f"- k6: {metadata.get('generator', {}).get('k6', 'chưa thu thập')}; Node: {metadata.get('generator', {}).get('node', 'chưa thu thập')}.",
+         f"- Server: {metadata.get('server', {}).get('hostname', 'chưa thu thập')}; CPU {metadata.get('server', {}).get('cpu_count', '?')} luồng; RAM {metadata.get('server', {}).get('memory', {}).get('MemTotal', '?')} byte.",
+         f"- Monitoring: {metadata.get('monitoring', {})}",
+         f"- Thời gian từng giai đoạn: {metadata.get('runs', [])}",
+         f"- Độ trễ tiếp nhận ảnh khách: {metric_values('http_req_duration{endpoint:classifier_submit,role:guest}')}; chờ hàng đợi: {analysis['classifier_queue_ms']}; xử lý: {analysis['classifier_processing_ms']}; đầu cuối: {analysis['classifier_total_ms']}.",
+         f"- Tài nguyên trong cửa sổ đo: {resource_summary}", '',
+         '- Mẫu CPU/RAM và network/disk của máy sinh tải: generator-resources.ndjson; mẫu server/container: resources.ndjson.', '',
+         '## Endpoint theo vai trò', '',
+         '| Vai trò | Endpoint | Request | p50 ms | p95 ms | p99 ms |', '| --- | --- | ---: | ---: | ---: | ---: |']
+for row in rows:
+    fmt = lambda value: '–' if value is None else f'{value:.2f}'
+    lines.append(f"| {row['role']} | {row['endpoint']} | {row['requests']} | {fmt(row['p50_ms'])} | {fmt(row['p95_ms'])} | {fmt(row['p99_ms'])} |")
+lines.extend(['', 'Percentile HTTP được tính riêng theo endpoint và vai trò.',
+              'Thời gian nhận diện đầu cuối bao gồm chờ và xử lý; cửa sổ tài nguyên bao gồm thời gian chờ job.',
+              '', '## Môi trường, phương pháp và giới hạn', '',
+              'Xem environment.json và versions.json để biết nguồn thu thập, phiên bản và cấu hình thực tế.',
+              'Tỷ lệ nhận diện mục tiêu 5%; thời gian nghỉ giữa thao tác 2–5 giây; một lần đo không chứng minh độ ổn định.',
+              'Dữ liệu thiếu và độ bao phủ được liệt kê trong readiness.md.',
+              '', '## Độ trễ đọc theo chặng (ms)', '',
+              '| Chặng | Trung bình | p95 | p99 |', '| --- | ---: | ---: | ---: |'])
+for stage, item in stage_latency.items():
+    lines.append(f"| {stage} | {item.get('avg', 'N/A')} | {item.get('p(95)', 'N/A')} | {item.get('p(99)', 'N/A')} |")
+if metadata['profile'] == 'smoke':
+    lines.extend(['', '**Đây là smoke test; kết quả không chứng minh khả năng chịu tải 10.000 người dùng.**'])
+(root / 'report.md').write_text('\n'.join(lines) + '\n', encoding='utf-8')
+
+try:
+    import matplotlib
+    matplotlib.use('Agg')
+    import matplotlib.pyplot as plt
+    top = sorted((row for row in rows if row['p95_ms'] is not None), key=lambda row: row['p95_ms'], reverse=True)[:15]
+    if top:
+        fig, ax = plt.subplots(figsize=(11, max(4, len(top) * .35)))
+        ax.barh([row['role'] + ': ' + row['endpoint'] for row in reversed(top)], [row['p95_ms'] for row in reversed(top)])
+        ax.set_xlabel('HTTP p95 (ms)'); ax.set_title('Mixed workload: slowest role/endpoint groups')
+        fig.tight_layout(); fig.savefig(root / 'latency-p95.png', dpi=150); plt.close(fig)
+    seriesfile = root / 'timeseries.json'
+    if seriesfile.exists():
+        series = json.loads(seriesfile.read_text(encoding='utf-8'))
+        fig, axes = plt.subplots(5, 1, figsize=(12, 14), sharex=True)
+        for ax, name, title in zip(axes, ('vus', 'rps', 'latency_p95', 'failures', 'classifier'),
+                                   ('VU', 'Request/s', 'p95 lớn nhất theo endpoint (ms)', 'Lỗi/s', 'Job nhận diện/s')):
+            for item in series.get(name, {}).get('result', []):
+                points = item.get('values', [])
+                if points:
+                    ax.plot([dt.datetime.fromtimestamp(float(p[0]), dt.timezone.utc) for p in points],
+                            [float(p[1]) for p in points], label=str(item.get('metric', {}).get('outcome', name)))
+            ax.set_ylabel(title); ax.grid(True, alpha=.3)
+        fig.tight_layout(); fig.savefig(root / 'timeseries.png', dpi=150); plt.close(fig)
+    if resources:
+        host = [r for r in resources if r.get('type') == 'host' and r.get('cpu_percent') is not None]
+        if host:
+            fig, axes = plt.subplots(2, 1, figsize=(12, 7), sharex=True)
+            stamp = [dt.datetime.fromtimestamp(r['timestamp'], dt.timezone.utc) for r in host]
+            axes[0].plot(stamp, [r['cpu_percent'] for r in host]); axes[0].set_ylabel('CPU %')
+            axes[1].plot(stamp, [r['memory_used_bytes'] / 1048576 for r in host]); axes[1].set_ylabel('RAM MiB')
+            fig.tight_layout(); fig.savefig(root / 'server-resources.png', dpi=150); plt.close(fig)
+    generator_samples = [r for r in genrows if r.get('cpu_percent') is not None and 'memory_used_bytes' in r]
+    if generator_samples:
+        fig, axes = plt.subplots(2, 1, figsize=(12, 7), sharex=True)
+        stamp = [dt.datetime.fromtimestamp(r['timestamp'], dt.timezone.utc) for r in generator_samples]
+        axes[0].plot(stamp, [r['cpu_percent'] for r in generator_samples]); axes[0].set_ylabel('CPU %')
+        axes[1].plot(stamp, [r['memory_used_bytes'] / 1048576 for r in generator_samples]); axes[1].set_ylabel('RAM MiB')
+        fig.tight_layout(); fig.savefig(root / 'generator-resources.png', dpi=150); plt.close(fig)
+except ImportError:
+    print('Matplotlib is unavailable; JSON, CSV and Markdown were generated without a plot.', file=sys.stderr)
+checksums = []
+for file in sorted(root.iterdir()):
+    if file.is_file() and file.name != 'checksums.sha256':
+        checksums.append(hashlib.sha256(file.read_bytes()).hexdigest() + '  ' + file.name)
+(root / 'checksums.sha256').write_text('\n'.join(checksums) + '\n', encoding='utf-8')
+print(f'Analysis written to {root}')

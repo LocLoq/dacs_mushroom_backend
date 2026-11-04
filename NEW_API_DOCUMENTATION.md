@@ -192,7 +192,7 @@ Task không tồn tại trả `404`. Task đã có lịch sử minh chứng khô
 
 Cho phép: `admin`, `manager`.
 
-Manager chỉ thấy nhân viên thuộc cơ sở mình được phân công quản lý. Có `batchId` thì lô phải thuộc cơ sở đó và người nhận phải được phân công lô; thiếu `batchId` vẫn lọc theo cơ sở quản lý. Các kiểm tra này áp dụng cả khi tạo, sửa, xem, xóa và duyệt công việc. Admin chỉ định manager bằng GET/POST `/production-facilities/:id/managers` và DELETE `/production-facilities/:id/managers/:userId`; POST nhận `{userId}` hoặc `{userIds:[...]}`. GET hỗ trợ `available=true`, `search`, `page`, `limit` (mặc định 20, tối đa 100). Chỉ admin truy cập quản trị tài khoản, vai trò và nhật ký hệ thống.
+Manager chỉ thấy nhân viên thuộc cơ sở mình được phân công quản lý. Manager có thể tự tạo cơ sở và được tự động gán quyền quản lý, đồng thời được thêm, xem và thu hồi staff ở cơ sở và lô thuộc phạm vi quản lý. Có `batchId` thì lô phải thuộc cơ sở đó và người nhận phải được phân công lô; thiếu `batchId` vẫn lọc theo cơ sở quản lý. Các kiểm tra này áp dụng cả khi tạo, sửa, xem, xóa và duyệt công việc. Admin chỉ định manager bằng GET/POST `/production-facilities/:id/managers` và DELETE `/production-facilities/:id/managers/:userId`; POST nhận `{userId}` hoặc `{userIds:[...]}`. GET hỗ trợ `available=true`, `search`, `page`, `limit` (mặc định 20, tối đa 100). Chỉ admin truy cập quản trị tài khoản, vai trò và nhật ký hệ thống.
 
 Hỗ trợ `page`, `limit` (1–50) và `search` theo username/họ tên. Response phân trang chỉ gồm dữ liệu cần thiết:
 

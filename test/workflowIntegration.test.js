@@ -166,11 +166,11 @@ test('facility managers can only assign and manage work in their facilities, inc
     assert.equal((await request(`${ownPath}/managers`, admin, { userIds: [scopedManager.id, scopedManager.id, secondManager.id] })).body.addedCount, 2);
     assert.equal((await request(`${ownPath}/managers`, admin, { userId: scopedManager.id })).status, 201);
     assert.equal((await request(`${ownPath}/managers?limit=1`, admin)).body.pagination.totalItems, 2);
-    assert.equal((await request(`${ownPath}/staff`, scopedManager, { userId: ownStaff.id })).status, 403);
+    assert.equal((await request(`${ownPath}/staff`, scopedManager, { userId: ownStaff.id })).status, 201);
     assert.equal((await request(`${ownPath}/staff`, admin, { userId: ownStaff.id })).status, 201);
     assert.equal((await request(`${outPath}/staff`, scopedManager, { userId: ownStaff.id })).status, 403);
     assert.equal((await request(`${outPath}/staff`, admin, { userId: outsideStaff.id })).status, 201);
-    assert.equal((await request(`/cultivation-batches/${ownBatch.id}/staff`, scopedManager, { userId: ownStaff.id })).status, 403);
+    assert.equal((await request(`/cultivation-batches/${ownBatch.id}/staff`, scopedManager, { userId: ownStaff.id })).status, 201);
     assert.equal((await request(`/cultivation-batches/${ownBatch.id}/staff`, admin, { userId: ownStaff.id })).status, 201);
     assert.equal((await request(`/cultivation-batches/${outsideBatch.id}/staff`, admin, { userId: outsideStaff.id })).status, 201);
     const candidates = await request('/dashboard/task-assignees?limit=1', scopedManager);
@@ -210,6 +210,39 @@ test('facility managers can only assign and manage work in their facilities, inc
     assert.equal((await request('/dashboard/tasks', scopedManager, work)).status, 403);
     assert.equal((await request(`/dashboard/tasks/${batched.body.data.id}`, ownStaff)).status, 200);
     assert.equal((await request(`/dashboard/tasks/${batched.body.data.id}`, admin)).status, 200);
+});
+
+test('manager creates and immediately manages their own facility', { skip: !enabled }, async () => {
+    const created = await request('/production-facilities', manager, { name: 'Manager created', address: 'Test', facilityType: 'HOUSEHOLD' });
+    assert.equal(created.status, 201, JSON.stringify(created.body));
+    const facilityId = created.body.data.id;
+    const assignment = await prisma.facilityManager.findUnique({ where: { facilityId_userId: { facilityId, userId: manager.id } } });
+    assert.equal(assignment.grantedByUserId, manager.id);
+    assert.equal((await request(`/production-facilities/${facilityId}`, manager)).status, 200);
+    assert.equal((await request(`/production-facilities/${facilityId}/staff`, manager, { userId: staff.id })).status, 201);
+    assert.equal((await request(`/production-facilities/${facilityId}/staff`, manager)).status, 200);
+    const managedBatch = await prisma.cultivationBatch.create({ data: { batchCode: 'MANAGER-CREATED-BATCH', facilityId, mushroomId: species.id, startDate: new Date() } });
+    const batchPath = `/cultivation-batches/${managedBatch.id}`;
+    assert.equal((await request(`${batchPath}/staff`, manager, { userId: staff.id })).status, 201);
+    assert.equal((await request(batchPath, staff)).status, 200);
+    assert.equal((await request(`${batchPath}/staff/${staff.id}`, manager, undefined, 'DELETE')).status, 200);
+    assert.equal((await request(batchPath, staff)).status, 403);
+    assert.equal((await request(`${batchPath}/staff`, manager, { userId: staff.id })).status, 201);
+    assert.equal((await request(`/production-facilities/${facilityId}/staff/${staff.id}`, manager, undefined, 'DELETE')).status, 200);
+    assert.equal((await request(batchPath, staff)).status, 403);
+    assert.equal((await request(`/production-facilities/${facilityId}/managers`, manager)).status, 403);
+});
+
+test('manager facility creation rolls back if manager assignment fails', { skip: !enabled }, async () => {
+    const name = 'Manager assignment rollback fixture';
+    await connection.query("CREATE TRIGGER fail_manager_assignment BEFORE INSERT ON facility_managers FOR EACH ROW SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'forced manager assignment failure'");
+    try {
+        const response = await request('/production-facilities', manager, { name, address: 'Test', facilityType: 'HOUSEHOLD' });
+        assert.equal(response.status, 500);
+        assert.equal(await prisma.productionFacility.count({ where: { name } }), 0);
+    } finally {
+        await connection.query('DROP TRIGGER fail_manager_assignment');
+    }
 });
 
 test('only admins can access account and system administration APIs', { skip: !enabled }, async () => {
@@ -576,6 +609,10 @@ test('staff scope, care photos, notification ownership and immediate revocation'
     assert.equal(care.status, 201, JSON.stringify(care.body));
     assert.equal(care.body.data.images.length, 1);
     const url = care.body.data.images[0].imageUrl; uploadedUrls.add(url);
+    const careList = await request(staffPath + '/care-logs', staff);
+    assert.equal(careList.status, 200);
+    assert.equal(careList.body.data.find(row => row.id === care.body.data.id).images[0].imageUrl, url);
+    assert.deepEqual(careList.body.data.find(row => row.id === longAction.body.data.id).images, []);
     assert.equal((await request(url.replace('/uploads', '/../uploads'), staff)).status, 200);
     assert.equal((await request(url.replace('/uploads', '/../uploads'), other)).status, 403);
     assert.equal((await request(url.replace('/uploads', '/../uploads'), null)).status, 404);

@@ -180,6 +180,7 @@ router.get('/:id/care-logs', authenticateToken, authorizeRoles(...global.allRole
 
     const careLogs = await prisma.cultivationCareLog.findMany({
         where: { batchId },
+        include: { images: true },
         orderBy: { recordedAt: 'desc' }
     });
 
