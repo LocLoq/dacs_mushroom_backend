@@ -13,7 +13,7 @@ RUN npm ci --omit=dev --ignore-scripts \
     && DATABASE_URL=mysql://build:build@localhost:3306/build npx prisma generate \
     && npm cache clean --force
 
-COPY --chown=node:node server.cjs swagger.yaml ./
+COPY --chown=node:node server.cjs classifier-worker.cjs swagger.yaml ./
 COPY --chown=node:node routes ./routes
 COPY --chown=node:node middlewares ./middlewares
 COPY --chown=node:node services ./services

@@ -1,5 +1,11 @@
 # Retry, giám sát classifier và rate limit
 
+Worker nhận diện và watchdog chạy trong tiến trình `classifier-worker.cjs` riêng. Docker Compose khởi chạy service `classifier-worker` dùng chung volume uploads với API; các launcher local cũng khởi chạy worker. Khi chạy thủ công `node server.cjs`, cần chạy thêm `node classifier-worker.cjs` với cùng Redis, database và thư mục uploads. API và worker dùng pool riêng, mặc định lần lượt 10 và 4 kết nối.
+
+Giới hạn mặc định 100 yêu cầu nhận diện chưa kết thúc được quản lý nguyên tử trong Redis, gồm thời gian nhận ảnh. Khi đầy, API trả `503 CLASSIFIER_QUEUE_FULL` và `Retry-After: 15` trước khi lưu ảnh. Reservation được dọn khi kết thúc hoặc lỗi và có thời hạn để phục hồi sau sự cố. Socket.IO dùng Redis adapter/emitter để chuyển sự kiện giữa hai tiến trình.
+
+Các biến bổ sung: `DATABASE_POOL_SIZE` (API: 10), `CLASSIFIER_WORKER_DB_POOL_SIZE` (Compose worker: 4), `CLASSIFIER_WORKER_CONCURRENCY` (1), `CLASSIFIER_MAX_CONCURRENCY` (1), `CLASSIFIER_TORCH_THREADS` (1) và `CLASSIFIER_ADMISSION_LIMIT` (100). Khi chạy worker thủ công, `DATABASE_POOL_SIZE` điều khiển pool của tiến trình đó.
+
 ## Hành vi API và hàng đợi
 
 Toàn bộ `/api` mặc định cho phép 300 yêu cầu/phút; riêng `POST /api/mushroom-classifier/classify` cho phép 10 yêu cầu/phút. Hai hạn mức độc lập, đếm theo tài khoản có JWT và `tokenver` hợp lệ, hoặc IP khách. `/api/test` và `OPTIONS` được miễn. Bộ đếm ở bộ nhớ của mỗi backend, reset khi restart; triển khai hiện tại dùng một backend.

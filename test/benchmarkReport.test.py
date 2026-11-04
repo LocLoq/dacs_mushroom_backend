@@ -9,6 +9,23 @@ ANALYZER = Path(__file__).resolve().parents[1] / 'benchmarks' / 'k6' / 'analyze-
 
 
 class BenchmarkReportTest(unittest.TestCase):
+    def test_pool_calibration_profile_produces_analysis(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            metadata = {'schema_version': 2, 'run_id': 'calibration', 'profile': 'calibration-100-vu',
+                        'mode': 'capacity', 'roles': {}, 'base_url': 'http://127.0.0.1',
+                        'source_ips': 'local', 'rate_limits_declared': {}, 'runs': [], 'incomplete': True}
+            (root / 'metadata.json').write_text(json.dumps(metadata), encoding='utf-8')
+            metric = {'values': {'p(95)': 123.4, 'p(99)': 234.5}}
+            (root / 'measured.summary.json').write_text(json.dumps({'metrics': {
+                'http_req_duration{phase:business,kind:read}': metric}}), encoding='utf-8')
+            result = subprocess.run([sys.executable, str(ANALYZER), str(root)], capture_output=True, text=True)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            analysis = json.loads((root / 'analysis.json').read_text(encoding='utf-8'))
+            self.assertEqual(analysis['profile'], 'calibration-100-vu')
+            self.assertEqual(analysis['read_latency_ms']['p(95)'], 123.4)
+            self.assertFalse(json.loads((root / 'readiness.json').read_text(encoding='utf-8'))['ready'])
+
     def test_complete_evidence_can_be_ready_even_when_threshold_fails(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -70,6 +87,21 @@ class BenchmarkReportTest(unittest.TestCase):
             names = ('http_req_duration{phase:business,kind:read}', 'http_req_failed{phase:business}', 'checks{phase:business}')
             metrics = {name: {'values': {}, 'thresholds': {'threshold': {'ok': name != names[0]}}} for name in names}
             (root / 'measured.summary.json').write_text(json.dumps({'metrics': metrics}), encoding='utf-8')
+            result = subprocess.run([sys.executable, str(ANALYZER), str(root)], capture_output=True, text=True)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            readiness = json.loads((root / 'readiness.json').read_text(encoding='utf-8'))
+            self.assertFalse(readiness['ready'])
+            self.assertFalse(readiness['performance_passed'])
+
+    def test_crossed_threshold_in_k6_log_survives_missing_summary(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            metadata = {'schema_version': 2, 'run_id': 'testrun', 'profile': 'full', 'mode': 'capacity',
+                        'roles': {}, 'base_url': 'http://127.0.0.1', 'source_ips': 'local',
+                        'rate_limits_declared': {}, 'finished_at': '2026-01-01T00:00:10Z',
+                        'runs': [{'id': 'measured', 'exit_code': 99}]}
+            (root / 'metadata.json').write_text(json.dumps(metadata), encoding='utf-8')
+            (root / 'measured.log').write_text("thresholds on metrics 'checks{phase:business}, http_req_failed{phase:business}' have been crossed", encoding='utf-8')
             result = subprocess.run([sys.executable, str(ANALYZER), str(root)], capture_output=True, text=True)
             self.assertEqual(result.returncode, 0, result.stderr)
             readiness = json.loads((root / 'readiness.json').read_text(encoding='utf-8'))

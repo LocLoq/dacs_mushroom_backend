@@ -1,5 +1,17 @@
 # Benchmark k6 theo vai trò
 
+## Chạy tự động từ máy Windows
+
+Trong PowerShell tại thư mục backend, chạy `powershell -NoProfile -File benchmarks/k6/run-local.ps1`. Mặc định script dùng SSH `loql@192.168.1.200`, khóa `~/.ssh/id_ed25519`, ảnh `.cache/k6-test/mushroom.jpg`, k6 và Python trong các vị trí mặc định trên máy này. Có thể đổi bằng tham số `-Server`, `-SshUser`, `-Image`, `-K6`, `-Python`. Host key phải được xác minh và có trong `~/.ssh/known_hosts` trước khi chạy.
+
+Script tạo project và database benchmark mới, tự chạy smoke 10 VU, dọn stack smoke khi đạt, sau đó seed 560 tài khoản, đo bốn cấu hình classifier và hai cấu hình pool 100 VU, xác thực lại và chạy profile 10.000 VU. Dùng `-Smoke` để chỉ chạy kiểm chứng nhỏ. Script yêu cầu Docker Desktop, SSH/SCP, Node, tar, k6 và Python có Pillow/Matplotlib; server cần Docker Compose, OpenSSL và cổng 18080 trống. Cần đủ thời gian cho bước chuẩn bị, calibration, 40 phút tải và tối đa 15 phút chờ job.
+
+Với smoke ngắn, nếu thiếu duy nhất độ phủ chuỗi VU Prometheus, script ghi cảnh báo và cho phép tiếp tục; `readiness.json` vẫn ghi chưa đủ dữ liệu. Các lỗi monitoring, metadata và coverage khác vẫn chặn lượt chạy. Lượt đo đầy đủ vẫn yêu cầu độ phủ ít nhất 95% và khoảng trống không quá 15 giây.
+
+Nếu API chuyển sang `unhealthy` hoặc tạm thời không còn container, runner ghi cảnh báo và tiếp tục sinh tải; trạng thái health được lưu trong `resources.ndjson`. OOM hoặc container restart vẫn làm dừng lượt đo.
+
+Kết quả nằm trong `.cache/benchmark-results/<run>/measured`, còn hai tệp calibration nằm ngay trong thư mục run. Kết quả, danh sách tài khoản và JWT được giữ dưới `.cache`; không chia sẻ thư mục phiên đăng nhập. Smoke không chứng minh năng lực 10.000 VU. Theo dõi Grafana tại `http://127.0.0.1:3000` khi monitoring đang chạy.
+
 Bộ chạy mô phỏng tối đa **10 admin, 50 manager, 500 staff và 9.440 khách**. Profile đầy đủ tăng tải trong 8 phút, giữ 10.000 VU trong 30 phút và giảm tải trong 2 phút. VU chọn nhận diện cho 5% thao tác; các thao tác còn lại đọc hoặc ghi dữ liệu tương ứng vai trò, nghỉ 2–5 giây. Thời gian chờ job có thể kéo dài sau profile tối đa 15 phút.
 
 Profile `smoke` tạo 1 admin, 1 manager, 2 staff và 6 khách. Smoke chỉ xác minh luồng; không chứng minh năng lực 10k. Mỗi lần chạy gồm preflight, warmup và measured riêng. Preflight kiểm tra các endpoint đã liệt kê trong ngưỡng `business_requests` của kịch bản; nếu một mục bắt buộc không được gọi hoặc một kiểm tra thất bại, runner dừng trước khi đo.
@@ -73,7 +85,7 @@ $env:K6_PROMETHEUS_RW_SERVER_URL = 'http://127.0.0.1:9090/api/v1/write'
 
 Mở `http://127.0.0.1:3000`, đăng nhập user `benchmark`. Prometheus và Grafana chỉ bind loopback. Chỉ số k6 dùng nhãn vai trò, endpoint và trạng thái, không dùng username, token hay job ID. Việc bỏ `K6_PROMETHEUS_RW_SERVER_URL` vẫn tạo báo cáo cục bộ.
 
-Lượt đầy đủ yêu cầu Prometheus, Grafana và sampler qua SSH. Cài `ssh2@1.17.0` vào `BENCHMARK_TOOLS`, kiểm tra host key và lưu vào `<BENCHMARK_TOOLS>/known_hosts`, rồi đặt `SSH_HOST`, `SSH_PORT`, `SSH_USER`, `SSH_PASSWORD`. Tùy chọn `BENCHMARK_COMPOSE_PROJECT` và `BENCHMARK_REMOTE_REPO` nếu khác `dacs-mushroom` và `/home/loql/dacs_mushroom_backend`. Tài khoản SSH cần Python 3, quyền đọc `/proc` và Docker socket. Máy sinh tải Linux cần quyền đọc `/proc/net/dev` và `/proc/diskstats`; Windows cần quyền đọc các lớp CIM hiệu năng mạng/đĩa. Runner kiểm tra dữ liệu này trước lượt tải đầy đủ. Smoke realistic có thể chạy không SSH; báo cáo ghi thiếu dữ liệu. Sampler chạy đến khi runner dừng, bao gồm thời gian chờ job. Có thể đặt `BENCHMARK_PROMETHEUS_URL` và `BENCHMARK_GRAFANA_URL` nếu monitoring không ở localhost.
+Lượt đầy đủ yêu cầu Prometheus, Grafana và sampler qua SSH. Cài `ssh2@1.17.0` vào `BENCHMARK_TOOLS`, kiểm tra host key và lưu vào `<BENCHMARK_TOOLS>/known_hosts`, rồi đặt `SSH_HOST`, `SSH_PORT`, `SSH_USER` và một trong `SSH_PRIVATE_KEY`, `SSH_AUTH_SOCK`, `SSH_PASSWORD`. Khóa có mật khẩu dùng thêm `SSH_PASSPHRASE`. Tùy chọn `BENCHMARK_COMPOSE_PROJECT` và `BENCHMARK_REMOTE_REPO` nếu khác `dacs-mushroom` và `/home/loql/dacs_mushroom_backend`. Tài khoản SSH cần Python 3, quyền đọc `/proc` và Docker socket. Máy sinh tải Linux cần quyền đọc `/proc/net/dev` và `/proc/diskstats`; Windows cần quyền đọc các lớp CIM hiệu năng mạng/đĩa. Runner kiểm tra dữ liệu này trước lượt tải đầy đủ. Smoke realistic có thể chạy không SSH; báo cáo ghi thiếu dữ liệu. Sampler chạy đến khi runner dừng, bao gồm thời gian chờ job. Có thể đặt `BENCHMARK_PROMETHEUS_URL` và `BENCHMARK_GRAFANA_URL` nếu monitoring không ở localhost.
 
 ```powershell
 $env:BENCHMARK_TOOLS = Join-Path $env:TEMP 'dacs-benchmark-tools'
@@ -84,6 +96,8 @@ ssh -o StrictHostKeyChecking=accept-new -o "UserKnownHostsFile=$env:BENCHMARK_TO
 ## Kết quả và dọn dữ liệu
 
 Thư mục kết quả phải mới hoặc rỗng. Runner tự phân tích bằng `BENCHMARK_PYTHON` (mặc định `python`) sau lượt chạy. Ngoài summary/log, báo cáo gồm `versions.json`, `environment.json`, `readiness.json`, `readiness.md`, `timeseries.json` khi có Prometheus, `checksums.sha256`, `coverage.csv`, `endpoints.csv`, `analysis.json`, `report.md` và biểu đồ nếu có Matplotlib. `readiness.md` tách thông tin thiếu khỏi trạng thái đạt ngưỡng hiệu năng. Metadata được thu từ máy thực chạy; kết quả cũ thiếu thông tin sẽ không được tự suy đoán. Mỗi summary lọc `setup_data`; session không được ghi vào summary.
+
+Nếu summary của k6 bị thiếu nhưng Prometheus vẫn giữ mẫu của lượt chạy, có thể chạy `node benchmarks/k6/recover-prometheus.cjs <RESULTS_DIR>`. Công cụ tạo báo cáo và CSV khôi phục riêng từ counter, đối chiếu counter HTTP và đánh dấu số liệu gần đúng; không suy ra p95/p99 toàn lượt từ các percentile theo từng cửa sổ. Tùy chọn `BENCHMARK_PROMETHEUS_URL` nếu Prometheus không ở localhost.
 
 Để xóa dữ liệu có tiền tố của một lần chạy sau khi dừng tải, dùng cùng biến database, uploads và run ID như lúc seed:
 

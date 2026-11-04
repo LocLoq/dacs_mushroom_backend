@@ -509,6 +509,8 @@ model ClassifierLookup {
 
   @@index([userId, createdAt])
   @@index([status, createdAt])
+  @@index([status, updatedAt, id])
+  @@index([status, startedAt, id])
   @@index([createdAt])
   @@map("classifier_lookups")
 }

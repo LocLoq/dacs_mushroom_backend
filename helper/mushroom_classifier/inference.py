@@ -129,11 +129,16 @@ class ClassifierEngine:
         except ClassifierError: raise
         except (UnidentifiedImageError, OSError) as error: raise ClassifierError("IMAGE_INVALID", "Tệp ảnh bị hỏng hoặc không phải ảnh hợp lệ.", 422) from error
         try:
+            preprocess_started = time.perf_counter()
             tensor = self.transform(image).unsqueeze(0).to(self.device)
-            with torch.no_grad(): probabilities = F.softmax(self.model(tensor)[0], dim=0); confidence, index = torch.max(probabilities, 0)
+            preprocess_ms = (time.perf_counter() - preprocess_started) * 1000
+            model_started = time.perf_counter()
+            with torch.inference_mode(): probabilities = F.softmax(self.model(tensor)[0], dim=0); confidence, index = torch.max(probabilities, 0)
+            if self.device.type == 'cuda': torch.cuda.synchronize(self.device)
+            model_ms = (time.perf_counter() - model_started) * 1000
         except Exception as error: raise ClassifierError("INFERENCE_FAILED", "Không thể thực hiện phân loại ảnh.") from error
         index_value, confidence_value = index.item(), float(confidence.item())
         item = self.catalog[index_value]; poisonous = item["isPoisonous"]
         threshold = POISONOUS_CONFIDENCE_THRESHOLD if poisonous else NON_POISONOUS_CONFIDENCE_THRESHOLD
         accepted = confidence_value >= threshold
-        return {"name": item["name"] if accepted else "unknown", "scientificName": item["scientificName"], "rawPrediction": self.labels[index_value], "accepted": accepted, "edibility": "POISONOUS" if accepted and poisonous else "NON_POISONOUS" if accepted else "UNKNOWN", "confidence": confidence_value, "confidenceThreshold": threshold, "isPoisonous": poisonous, "image": {"format": ALLOWED_FORMATS[detected][0], "mimeType": ALLOWED_FORMATS[detected][1], "sizeBytes": len(image_bytes), "sha256": hashlib.sha256(image_bytes).hexdigest()}, "inferenceTimeMs": round((time.perf_counter() - started) * 1000, 2)}
+        return {"name": item["name"] if accepted else "unknown", "scientificName": item["scientificName"], "rawPrediction": self.labels[index_value], "accepted": accepted, "edibility": "POISONOUS" if accepted and poisonous else "NON_POISONOUS" if accepted else "UNKNOWN", "confidence": confidence_value, "confidenceThreshold": threshold, "isPoisonous": poisonous, "image": {"format": ALLOWED_FORMATS[detected][0], "mimeType": ALLOWED_FORMATS[detected][1], "sizeBytes": len(image_bytes), "sha256": hashlib.sha256(image_bytes).hexdigest()}, "inferenceTimeMs": round((time.perf_counter() - started) * 1000, 2), "timings": {"preprocessMs": round(preprocess_ms, 2), "modelMs": round(model_ms, 2)}}

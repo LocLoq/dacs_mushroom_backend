@@ -6,10 +6,13 @@ const { classifierUploadDirectory } = require('../../services/classifierLifecycl
 const equal = (a, b) => a instanceof Date || b instanceof Date ? new Date(a).getTime() === new Date(b).getTime() : a === b;
 function matches(row, where) {
     return Object.entries(where).every(([key, value]) => {
+        if (key === 'OR') return value.some((item) => matches(row, item));
+        if (key === 'NOT') return !matches(row, value);
         if (value === undefined) return true;
         if (value && typeof value === 'object' && !(value instanceof Date)) {
             if (value.in) return value.in.includes(row[key]);
             if (value.gt !== undefined) return row[key] > value.gt;
+            if (value.lte !== undefined) return row[key] != null && row[key] <= value.lte;
         }
         return equal(row[key], value);
     });

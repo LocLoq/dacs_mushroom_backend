@@ -17,7 +17,7 @@ global.prisma = {
     user: { findUnique: async () => ({ id: 1, username: 'user', tokenver: 0, role: { name: 'staff' } }) }
 };
 
-const queue = { add: async (data, options) => queuedJobs.push({ data, options }),
+const queue = { client: { status: 'ready', eval: async () => 1, zrem: async () => 1 }, add: async (data, options) => queuedJobs.push({ data, options }),
     health: { assertReady: async () => {} }, classifierConfig: classifierConfig() };
 require.cache[require.resolve('../queues/mushroomClassifierQueue')] = { exports: queue };
 const router = require('../routes/mushroomClassifier');
@@ -51,6 +51,18 @@ test('public classifier request creates a queued lookup and returns 202', async 
     assert.equal(queuedJobs[0].options.jobId, body.jobId);
     assert.equal(creates[0].inputPath, queuedJobs[0].data.path);
     assert.match(queuedJobs[0].data.path, /uploads[\\/]classifier[\\/]/);
+});
+
+test('a full classifier queue rejects before saving an upload or creating a lookup', async (t) => {
+    const beforeCreates = creates.length;
+    t.mock.method(queue.client, 'eval', async () => 0);
+    const form = new FormData();
+    form.append('image', new Blob(['photo'], { type: 'image/png' }), 'full.png');
+    const response = await fetch(`${baseUrl}/api/mushroom-classifier/classify`, { method: 'POST', body: form });
+    assert.equal(response.status, 503);
+    assert.equal(response.headers.get('retry-after'), '15');
+    assert.equal((await response.json()).code, 'CLASSIFIER_QUEUE_FULL');
+    assert.equal(creates.length, beforeCreates);
 });
 
 test('classifier validation and upload errors return shared 400 errors without creating lookups', async () => {

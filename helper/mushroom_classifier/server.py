@@ -8,6 +8,7 @@ from contextlib import asynccontextmanager
 from typing import Annotated
 
 import uvicorn
+import torch
 from fastapi import FastAPI, File, Form, Header, HTTPException, Request, UploadFile
 from fastapi.responses import JSONResponse
 
@@ -23,6 +24,7 @@ def _token_is_valid(value: str | None) -> bool:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    torch.set_num_threads(max(1, int(os.getenv("CLASSIFIER_TORCH_THREADS", "1"))))
     app.state.engine = ClassifierEngine.load()
     app.state.semaphore = asyncio.Semaphore(max(1, int(os.getenv("CLASSIFIER_MAX_CONCURRENCY", "1"))))
     yield
@@ -39,7 +41,7 @@ async def classifier_error_handler(_: Request, error: ClassifierError):
 @app.get("/health")
 async def health(request: Request):
     engine = request.app.state.engine
-    return {"status": "ready", "device": str(engine.device), "classCount": len(engine.labels)}
+    return {"status": "ready", "device": str(engine.device), "classCount": len(engine.labels), "threads": torch.get_num_threads()}
 
 
 @app.post("/v1/classify")

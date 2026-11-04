@@ -42,6 +42,7 @@ async function failLookup({ prisma = global.prisma, lookup, code, message, where
         data: { status: 'FAILED', nextRetryAt: null, errorMessage: `[${code}] ${message}`.slice(0, 2000), completedAt: new Date() }
     });
     if (!changed.count) return false;
+    await require('./classifierAdmission').release(lookup.id);
     abortLookup(lookup.id, lookup.startedAt);
     console.error('Classifier job failed:', { jobId: lookup.id, code });
     await notify(audit, emit, {

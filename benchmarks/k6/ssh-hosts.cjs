@@ -1,4 +1,5 @@
 const crypto = require('node:crypto');
+const fs = require('node:fs');
 
 // OpenSSH may hash hostnames and represents non-default ports as [host]:port.
 function knownHostKey(contents, host, port = 22) {
@@ -22,4 +23,11 @@ function knownHostKey(contents, host, port = 22) {
   }
   return null;
 }
-module.exports = { knownHostKey };
+function sshAuthentication(environment = process.env, readFile = fs.readFileSync) {
+  const methods = [environment.SSH_PRIVATE_KEY, environment.SSH_AUTH_SOCK, environment.SSH_PASSWORD].filter(Boolean);
+  if (methods.length !== 1) throw Error('Set exactly one of SSH_PRIVATE_KEY, SSH_AUTH_SOCK or SSH_PASSWORD');
+  if (environment.SSH_PRIVATE_KEY) return { privateKey: readFile(environment.SSH_PRIVATE_KEY), ...(environment.SSH_PASSPHRASE ? { passphrase: environment.SSH_PASSPHRASE } : {}) };
+  if (environment.SSH_AUTH_SOCK) return { agent: environment.SSH_AUTH_SOCK };
+  return { password: environment.SSH_PASSWORD };
+}
+module.exports = { knownHostKey, sshAuthentication };

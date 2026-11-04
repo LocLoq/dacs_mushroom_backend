@@ -1,7 +1,7 @@
 const assert = require('node:assert/strict');
 const crypto = require('node:crypto');
 const { test } = require('node:test');
-const { knownHostKey } = require('../benchmarks/k6/ssh-hosts.cjs');
+const { knownHostKey, sshAuthentication } = require('../benchmarks/k6/ssh-hosts.cjs');
 
 test('benchmark pins exact, alternate-port and hashed OpenSSH host entries', () => {
   const key = Buffer.from('benchmark-host-key');
@@ -14,4 +14,12 @@ test('benchmark pins exact, alternate-port and hashed OpenSSH host entries', () 
   assert.deepEqual(knownHostKey(hashed, 'server', 2222), key);
   assert.equal(knownHostKey(hashed, 'other', 2222), null);
   assert.equal(knownHostKey(`other ssh-ed25519 ${value}\n`, 'server'), null);
+});
+
+test('benchmark supports private key, agent, or password without mixing credentials', () => {
+  assert.deepEqual(sshAuthentication({ SSH_PRIVATE_KEY: 'key', SSH_PASSPHRASE: 'pass' }, () => Buffer.from('key-data')), { privateKey: Buffer.from('key-data'), passphrase: 'pass' });
+  assert.deepEqual(sshAuthentication({ SSH_AUTH_SOCK: 'agent' }), { agent: 'agent' });
+  assert.deepEqual(sshAuthentication({ SSH_PASSWORD: 'secret' }), { password: 'secret' });
+  assert.throws(() => sshAuthentication({}), /exactly one/);
+  assert.throws(() => sshAuthentication({ SSH_PASSWORD: 'secret', SSH_PRIVATE_KEY: 'key' }), /exactly one/);
 });

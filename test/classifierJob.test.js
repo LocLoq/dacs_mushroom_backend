@@ -35,6 +35,16 @@ test('classifier worker persists success before broadcasting and removes the inp
     await assert.rejects(fs.promises.access(inputPath));
 });
 
+test('an expired queued lookup is failed before calling the model', async (t) => {
+    const f = await fixture(t, async () => { throw new Error('model must not run'); });
+    const current = f.rows.get(f.lookup.id);
+    current.updatedAt = new Date(Date.now() - 301000);
+    await f.processor(f.job);
+    assert.equal(f.rows.get(f.lookup.id).status, 'FAILED');
+    assert.match(f.rows.get(f.lookup.id).errorMessage, /QUEUE_WAIT_TIMEOUT/);
+    assert.equal(fs.existsSync(f.inputPath), false);
+});
+
 test('transient failures preserve image, emit retrying with 30/60 seconds, and eventually succeed', async (t) => {
     let calls = 0;
     const f = await fixture(t, async () => { if (++calls < 3) throw new PythonClassifierError('SERVICE_UNAVAILABLE', 'down', true); return { result }; });

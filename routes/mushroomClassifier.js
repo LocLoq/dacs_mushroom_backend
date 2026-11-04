@@ -10,6 +10,7 @@ const mushroomClassifierQueue = require('../queues/mushroomClassifierQueue');
 const { getRateLimiters } = require('../middlewares/rateLimit');
 const { classifierUploadDirectory, removeInputFile: removeFile, failLookup } = require('../services/classifierLifecycle');
 const { withDeadline, unavailable } = require('../services/classifierHealth');
+const admission = require('../services/classifierAdmission');
 
 const router = express.Router();
 const prisma = global.prisma;
@@ -43,14 +44,26 @@ router.post('/classify', auditAction('CLASSIFIER_SUBMIT', {
     metadata: (req) => ({ hasImage: Boolean(req.file) })
 }), getRateLimiters().classifier, optionalAuthenticateToken,
 handle(async (req, res, next) => { await mushroomClassifierQueue.health.assertReady(); next(); }),
+handle(async (req, res, next) => {
+    const id = crypto.randomUUID();
+    if (!await admission.reserve(mushroomClassifierQueue.client, id, mushroomClassifierQueue.classifierConfig.admissionLimit)) {
+        res.set('Retry-After', '15');
+        return res.status(503).json({ code: 'CLASSIFIER_QUEUE_FULL', message: 'Hàng đợi nhận diện đang đầy, vui lòng thử lại sau.' });
+    }
+    res.locals.classifierReservationId = id;
+    res.once('finish', () => { if (!res.locals.classifierOwnsInput) void admission.release(id, mushroomClassifierQueue.client); });
+    res.once('close', () => { if (!res.locals.classifierOwnsInput && !res.locals.classifierProcessing) void admission.release(id, mushroomClassifierQueue.client); });
+    next();
+}),
 upload.single('image'), handle(async (req, res) => {
     let accepted = false;
+    res.locals.classifierProcessing = true;
     try {
         if (!req.file) fail(400, 'Vui lòng đính kèm ảnh nấm');
         fields(req.body || {}, [], { allowEmpty: true });
 
         const lookup = await prisma.classifierLookup.create({
-            data: { userId: req.user?.id || null, originalName: req.file.originalname, mimeType: req.file.mimetype, fileSize: req.file.size, inputPath: req.file.path, maxAttempts: mushroomClassifierQueue.classifierConfig.attempts }
+            data: { id: res.locals.classifierReservationId, userId: req.user?.id || null, originalName: req.file.originalname, mimeType: req.file.mimetype, fileSize: req.file.size, inputPath: req.file.path, maxAttempts: mushroomClassifierQueue.classifierConfig.attempts }
         });
         res.locals.classifierLookupId = lookup.id;
         // Database ownership survives an enqueue/persistence outage. The monitor cleans it.
@@ -74,7 +87,10 @@ upload.single('image'), handle(async (req, res) => {
         accepted = true;
         res.status(202).json({ jobId: lookup.id, status: lookup.status });
     } catch (error) {
-        if (!res.locals.classifierOwnsInput) await removeFile(req.file?.path);
+        if (!res.locals.classifierOwnsInput) {
+            await removeFile(req.file?.path);
+            await admission.release(res.locals.classifierReservationId, mushroomClassifierQueue.client);
+        }
         if (error.status || accepted) throw error;
         console.error('Error in classifier route:', error);
         fail(503, 'Không thể tiếp nhận yêu cầu phân loại');

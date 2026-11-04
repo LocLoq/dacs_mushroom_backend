@@ -13,8 +13,15 @@ function createMushroomClassifierProcessor({ prisma = global.prisma, classify = 
         const lookup = await prisma.classifierLookup.findUnique({ where: { id: lookupId } });
         if (!lookup) { job.discard(); throw Object.assign(new Error('Classifier lookup missing'), { code: 'LOOKUP_MISSING' }); }
         if (lookup.status === 'SUCCEEDED' || lookup.status === 'FAILED') {
+            await require('../services/classifierAdmission').release(lookupId);
             await removeFile(lookup.inputPath);
             return { success: lookup.status === 'SUCCEEDED', result: lookup.result };
+        }
+
+        if (lookup.status === 'QUEUED' && now() - new Date(lookup.updatedAt || lookup.queuedAt).getTime() >= config.queueWaitMs) {
+            const changed = await failLookup({ prisma, lookup, code: 'QUEUE_WAIT_TIMEOUT', message: 'Yêu cầu chờ xử lý quá lâu', where: { updatedAt: lookup.updatedAt }, audit, emit, removeFile });
+            if (changed) return { success: false };
+            throw Object.assign(new Error('Classifier claim changed'), { code: 'CLAIM_CHANGED', retryable: true });
         }
 
         // Millisecond timestamps fence older/stalled attempts, including immediate retries.
@@ -40,6 +47,7 @@ function createMushroomClassifierProcessor({ prisma = global.prisma, classify = 
                 data: { status: 'SUCCEEDED', result, predictedName: result.name, edibility: result.edibility, confidence: result.confidence, errorMessage: null, completedAt: new Date(now()) }
             });
             if (saved.count) {
+                await require('../services/classifierAdmission').release(lookupId);
                 await notify(audit, emit, {
                     action: 'CLASSIFIER_COMPLETED', entityType: 'ClassifierLookup', entityId: lookupId,
                     method: 'SYSTEM', path: 'queue:mushroomClassifier', statusCode: 200, outcome: 'SUCCESS', metadata: { predictedName: result.name, confidence: result.confidence, attempt }

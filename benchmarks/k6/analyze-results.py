@@ -13,7 +13,7 @@ if len(sys.argv) != 2:
     raise SystemExit('Usage: python analyze-results.py RESULTS_DIR')
 root = Path(sys.argv[1])
 metadata = json.loads((root / 'metadata.json').read_text(encoding='utf-8'))
-if metadata.get('profile') not in ('smoke', 'full'):
+if metadata.get('profile') not in ('smoke', 'full', 'calibration-100-vu'):
     raise SystemExit('This analyzer expects a mixed-workload benchmark')
 
 def load_summary(phase):
@@ -94,17 +94,33 @@ for role in ('admin', 'manager', 'staff', 'guest'):
                            for action in ('read', 'write', 'classify')}
     job_outcomes[role] = {outcome: values(metrics.get(f'classifier_jobs{{outcome:{outcome},role:{role}}}', {})).get('count', 0)
                           for outcome in ('succeeded', 'failed', 'timeout', 'rejected', 'invalid')}
+if not metrics:
+    failures = None
+    action_counts = None
+    job_outcomes = None
+classifier_totals = None
+if job_outcomes is not None:
+    classifier_totals = {key: sum(row[key] for row in job_outcomes.values()) for key in ('succeeded', 'failed', 'timeout', 'rejected', 'invalid')}
+    classifier_totals['attempted'] = sum(classifier_totals.values())
+    classifier_totals['accepted'] = classifier_totals['attempted'] - classifier_totals['rejected'] - classifier_totals['invalid']
+    classifier_totals['success_all_percent'] = 100 * classifier_totals['succeeded'] / classifier_totals['attempted'] if classifier_totals['attempted'] else None
+    classifier_totals['success_accepted_percent'] = 100 * classifier_totals['succeeded'] / classifier_totals['accepted'] if classifier_totals['accepted'] else None
 resource_summary = {}
 resource_file = root / 'resources.ndjson'
 resources = []
 run = next((row for row in metadata.get('runs', []) if row['id'] == 'measured'), None)
 if resource_file.exists() and run and run.get('finished_at'):
     for line in resource_file.read_text(encoding='utf-8').splitlines():
-        try: resources.append(json.loads(line))
+        try:
+            record = json.loads(line)
+            if record.get('type') == 'runtime' and record.get('timestamp', 0) > 100000000000:
+                record['sample_timestamp_ms'] = record['timestamp']
+                record['timestamp'] /= 1000
+            resources.append(record)
         except ValueError: continue
     offset = metadata.get('clock_offset_ms', 0) / 1000
     start, end = epoch(run['started_at']) + offset, epoch(run['finished_at']) + offset
-    for service in ('host', 'api', 'db', 'redis', 'classifier'):
+    for service in ('host', 'api', 'db', 'redis', 'classifier', 'classifier-worker'):
         selected = [row for row in resources if start <= row.get('timestamp', 0) <= end and
                     (row.get('type') == 'host' if service == 'host' else row.get('type') == 'container' and row.get('service') == service)]
         resource_summary[service] = {'cpu_percent': describe([row.get('cpu_percent') for row in selected]),
@@ -120,6 +136,8 @@ analysis = {'profile': metadata['profile'], 'mode': metadata['mode'], 'roles': m
             'checks': metric_values('checks{phase:business}'), 'read_latency_ms': metric_values('http_req_duration{phase:business,kind:read}'),
             'failure_reasons': failures, 'action_counts': action_counts, 'classifier_outcomes': job_outcomes, 'classifier_jobs': metric_values('classifier_jobs'),
             'classifier_success': metric_values('classifier_success'), 'classifier_queue_ms': metric_values('classifier_queue_ms'),
+            'classifier_totals': classifier_totals, 'classifier_admission_rejected': metric_values('classifier_admission_rejected'),
+            'classifier_model_ms': metric_values('classifier_model_ms'), 'classifier_preprocess_ms': metric_values('classifier_preprocess_ms'),
             'classifier_processing_ms': metric_values('classifier_processing_ms'), 'classifier_total_ms': metric_values('classifier_total_ms'),
             'socket_events': metric_values('socket_events'), 'resources': resource_summary,
             'thresholds': thresholds, 'preflight_coverage': coverage, 'endpoints': rows,
@@ -133,7 +151,8 @@ require(metadata.get('schema_version') == 2, 'Metadata phiên bản 2 và nguồ
 require(not metadata.get('incomplete') and metadata.get('finished_at'), 'Lượt đo hoàn tất')
 for phase in ('preflight', 'warmup', 'measured'):
     record = next((row for row in metadata.get('runs', []) if row.get('id') == phase), {})
-    require(record.get('exit_code') in ((0, 99) if phase == 'measured' else (0,)) and (root / (phase + '.summary.json')).exists(), 'Giai đoạn ' + phase)
+    require(record.get('exit_code') in ((0, 99) if phase == 'measured' else (0,)), 'Giai đoạn ' + phase + ' hoàn thành')
+    require(bool(load_summary(phase)), 'Summary ' + phase + ' hợp lệ')
 required_coverage = [metric for key, metric in preflight.items() if pattern.match(key) and 'count>0' in metric.get('thresholds', {})]
 require(bool(required_coverage) and all(metric.get('thresholds', {}).get('count>0', {}).get('ok') and values(metric).get('count', 0) > 0 for metric in required_coverage), 'Danh mục endpoint preflight bắt buộc')
 require(metadata.get('sampler') == 'ssh' and bool(metadata.get('server')), 'Snapshot và sampler server qua SSH')
@@ -211,11 +230,17 @@ if before and after:
 core_threshold_names = ('http_req_duration{phase:business,kind:read}', 'http_req_failed{phase:business}', 'checks{phase:business}')
 core_thresholds = {name: thresholds.get(name) for name in core_threshold_names}
 performance = None if any(not item for item in core_thresholds.values()) else all(entry.get('ok') for item in core_thresholds.values() for entry in item.values())
+threshold_log = (root / 'measured.log').read_text(encoding='utf-8', errors='replace') if (root / 'measured.log').exists() else ''
+threshold_match = re.search(r"thresholds on metrics '([^']+)' have been crossed", threshold_log)
+crossed_thresholds = [name for name in core_threshold_names if threshold_match and name in threshold_match.group(1)]
+if crossed_thresholds:
+    performance = False
 stage_latency = {stage: metric_values('http_req_duration{kind:read,phase:business,stage:' + stage + '}')
                  for stage in ('ramp_1', 'ramp_2', 'ramp_3', 'ramp_4', 'hold', 'ramp_down', 'drain')}
-total_actions = sum(sum(row.values()) for row in action_counts.values())
-classifier_actions = sum(row['classify'] for row in action_counts.values())
+total_actions = sum(sum(row.values()) for row in (action_counts or {}).values())
+classifier_actions = sum(row['classify'] for row in (action_counts or {}).values())
 analysis.update({'performance_passed': performance, 'stage_read_latency_ms': stage_latency, 'sampling': sampling,
+                 'thresholds_crossed_in_k6_log': crossed_thresholds,
                  'peak_vus': peak_vus, 'hold_seconds_at_10000_vus': hold_seconds_10000,
                  'classifier_action_fraction': classifier_actions / total_actions if total_actions else None})
 readiness = {'schema_version': 2, 'ready': not missing, 'missing': missing, 'sampling': sampling,
@@ -239,9 +264,11 @@ lines = ['# Báo cáo benchmark', '', f"- Đủ dữ liệu viết báo cáo: {'
          f"- Lần chạy: {metadata['run_id']} / {metadata['profile']} / {metadata['mode']}",
          f"- Đích: {metadata.get('base_url', 'chưa biết')}; vai trò: {metadata.get('roles', {})}",
          f"- IP nguồn: {metadata.get('source_ips', 'chưa biết')}; số IP khai báo: {metadata.get('source_ip_count_declared', 'chưa biết')}", f"- Rate limit khai báo: {metadata.get('rate_limits_declared', 'chưa biết')}; hiệu lực: {metadata.get('rate_limits_effective', 'chưa xác minh')}",
-         f"- Request: {analysis['requests'].get('count', 0)}; tỷ lệ lỗi HTTP: {analysis['http_failed'].get('rate', 'chưa có')}",
-         f"- Phân loại lỗi: {failures}; kiểm tra: {analysis['checks']}", f"- Job nhận diện: {analysis['classifier_jobs']}; thành công: {analysis['classifier_success']}",
-         f"- Thao tác theo vai trò: {action_counts}", f"- Job theo vai trò: {job_outcomes}",
+         f"- Request: {analysis['requests'].get('count', 'chưa có summary')}; tỷ lệ lỗi HTTP: {analysis['http_failed'].get('rate', 'chưa có')}",
+         f"- Phân loại lỗi: {failures if failures is not None else 'chưa có summary'}; kiểm tra: {analysis['checks'] or 'chưa có summary'}", f"- Job nhận diện: {analysis['classifier_jobs'] or 'chưa có summary'}; thành công: {analysis['classifier_success'] or 'chưa có summary'}",
+         f"- Nhận diện theo lượt gửi và job được chấp nhận: {classifier_totals if classifier_totals is not None else 'chưa có summary'}; từ chối do hàng đợi đầy: {analysis['classifier_admission_rejected'] or 'không ghi nhận'}",
+         f"- Thời gian tiền xử lý/model (ms, job có kết quả): {analysis['classifier_preprocess_ms'] or 'không có mẫu'} / {analysis['classifier_model_ms'] or 'không có mẫu'}",
+         f"- Thao tác theo vai trò: {action_counts if action_counts is not None else 'chưa có summary'}", f"- Job theo vai trò: {job_outcomes if job_outcomes is not None else 'chưa có summary'}",
          f"- Số cặp vai trò/endpoint trong preflight: {len(coverage)}", '',
          f"- VU quan sát tối đa: {peak_vus}; số giây giữ 10.000 VU theo mẫu 5 giây: {hold_seconds_10000}; tỷ lệ thao tác nhận diện: {analysis['classifier_action_fraction']}.",
          '## Phiên bản và hệ thống', '',
@@ -258,6 +285,8 @@ lines = ['# Báo cáo benchmark', '', f"- Đủ dữ liệu viết báo cáo: {'
 for row in rows:
     fmt = lambda value: '–' if value is None else f'{value:.2f}'
     lines.append(f"| {row['role']} | {row['endpoint']} | {row['requests']} | {fmt(row['p50_ms'])} | {fmt(row['p95_ms'])} | {fmt(row['p99_ms'])} |")
+if metadata.get('profile') == 'calibration-100-vu':
+    lines.extend(['', 'Đây là lượt hiệu chỉnh 100 VU; kết quả không chứng minh khả năng chịu tải 10.000 VU.'])
 lines.extend(['', 'Percentile HTTP được tính riêng theo endpoint và vai trò.',
               'Thời gian nhận diện đầu cuối bao gồm chờ và xử lý; cửa sổ tài nguyên bao gồm thời gian chờ job.',
               '', '## Môi trường, phương pháp và giới hạn', '',
@@ -268,6 +297,11 @@ lines.extend(['', 'Percentile HTTP được tính riêng theo endpoint và vai t
               '| Chặng | Trung bình | p95 | p99 |', '| --- | ---: | ---: | ---: |'])
 for stage, item in stage_latency.items():
     lines.append(f"| {stage} | {item.get('avg', 'N/A')} | {item.get('p(95)', 'N/A')} | {item.get('p(99)', 'N/A')} |")
+if not metrics and (root / 'recovered-prometheus.json').exists():
+    recovered = json.loads((root / 'recovered-prometheus.json').read_text(encoding='utf-8'))
+    lines.extend(['', '## Số liệu khôi phục', '',
+                  f"Prometheus ghi khoảng {recovered.get('requests', 'chưa rõ')} request và {recovered.get('failures', 'chưa rõ')} lỗi nghiệp vụ. "
+                  'Đây là counter khôi phục gần đúng, không thay thế summary k6; xem recovered-report.md.'])
 if metadata['profile'] == 'smoke':
     lines.extend(['', '**Đây là smoke test; kết quả không chứng minh khả năng chịu tải 10.000 người dùng.**'])
 (root / 'report.md').write_text('\n'.join(lines) + '\n', encoding='utf-8')

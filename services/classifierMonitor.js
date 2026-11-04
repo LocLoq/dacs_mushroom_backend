@@ -57,18 +57,23 @@ function createClassifierMonitor({ prisma = global.prisma, queue, config = class
                 console.log('Classifier health:', { redis: health.redis, python: health.python });
                 lastHealth = health;
             }
-            let afterId;
-            while (!stopped) {
-                const lookups = await prisma.classifierLookup.findMany({
-                    where: { status: { in: ['QUEUED', 'PROCESSING'] }, ...(afterId && { id: { gt: afterId } }) },
-                    orderBy: { id: 'asc' }, take: config.pageSize
-                });
-                for (const lookup of lookups) {
-                    if (stopped) break;
-                    await reconcile(lookup, health.redis);
+            const overdue = { OR: [
+                { status: 'QUEUED', updatedAt: { lte: new Date(now() - config.queueWaitMs) } },
+                { status: 'PROCESSING', startedAt: { lte: new Date(now() - config.processingTimeoutMs) } }
+            ] };
+            for (const filter of [overdue, { NOT: overdue }]) {
+                let afterId;
+                while (!stopped) {
+                    const lookups = await prisma.classifierLookup.findMany({
+                        where: { status: { in: ['QUEUED', 'PROCESSING'] }, ...filter, ...(afterId && { id: { gt: afterId } }) },
+                        orderBy: { id: 'asc' }, take: config.pageSize
+                    });
+                    for (let index = 0; index < lookups.length && !stopped; index += 4) {
+                        await Promise.all(lookups.slice(index, index + 4).map((lookup) => reconcile(lookup, health.redis)));
+                    }
+                    if (lookups.length < config.pageSize) break;
+                    afterId = lookups.at(-1).id;
                 }
-                if (lookups.length < config.pageSize) break;
-                afterId = lookups.at(-1).id;
             }
         })().catch((error) => console.error('Classifier reconciliation failed:', { code: error.code, message: error.message }))
             .finally(() => { running = null; });

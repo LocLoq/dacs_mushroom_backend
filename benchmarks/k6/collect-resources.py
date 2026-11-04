@@ -87,16 +87,17 @@ if '--metadata' in sys.argv:
         allowed = ('RATE_LIMIT_WINDOW_MS', 'API_RATE_LIMIT_MAX', 'CLASSIFIER_RATE_LIMIT_MAX', 'TRUST_PROXY',
                    'CLASSIFIER_MAX_CONCURRENCY', 'CLASSIFIER_DEVICE', 'CLASSIFIER_TIMEOUT_MS',
                    'CLASSIFIER_JOB_ATTEMPTS', 'CLASSIFIER_RETRY_BACKOFF_MS', 'CLASSIFIER_QUEUE_WAIT_MS',
-                   'CLASSIFIER_PROCESSING_TIMEOUT_MS', 'NODE_ENV')
+                   'CLASSIFIER_PROCESSING_TIMEOUT_MS', 'CLASSIFIER_WORKER_CONCURRENCY',
+                   'CLASSIFIER_ADMISSION_LIMIT', 'CLASSIFIER_TORCH_THREADS', 'DATABASE_POOL_SIZE', 'NODE_ENV')
         version = {}
-        if service == 'api':
+        if service in ('api', 'classifier-worker'):
             version['runtime'] = command('docker', 'exec', entry['Id'], 'node', '-e',
-                "console.log(JSON.stringify({node:process.version,mode:require('./config/runtime-mode.cjs').runtimeMode(),pool:5,worker_concurrency:1}))")
+                "const fs=require('fs');const s=process.argv[1]==='api'?'api':'worker';let r={};try{r=JSON.parse(fs.readFileSync('/tmp/classifier-runtime-'+s+'.json'))}catch(e){};console.log(JSON.stringify({node:process.version,mode:require('./config/runtime-mode.cjs').runtimeMode(),pool:r.pool_limit,worker_concurrency:Number(process.env.CLASSIFIER_WORKER_CONCURRENCY||1),sample_timestamp:r.timestamp}))", service)
             version['npm'] = command('docker', 'exec', entry['Id'], 'npm', '--version')
             version['node_dependencies'] = command('docker', 'exec', entry['Id'], 'node', '-e',
                 "const cp=require('child_process');let out;try{out=cp.execFileSync('npm',['ls','--all','--json'],{encoding:'utf8',maxBuffer:25000000,stdio:['ignore','pipe','pipe']})}catch(e){out=e.stdout||''};try{const j=JSON.parse(out);function f(x){return {version:x.version,dependencies:Object.fromEntries(Object.entries(x.dependencies||{}).map(([k,v])=>[k,f(v)]))}};console.log(JSON.stringify(f(j)))}catch(e){process.exit(1)}")
             version['source_hash'] = command('docker', 'exec', entry['Id'], 'node', '-e',
-                "const fs=require('fs'),crypto=require('crypto'),h=crypto.createHash('sha256');function walk(p){for(const n of fs.readdirSync(p).sort()){const f=p+'/'+n;fs.statSync(f).isDirectory()?walk(f):h.update(f).update(fs.readFileSync(f))}};for(const p of ['config','routes','services','middlewares','queues','jobs'])walk(p);h.update(fs.readFileSync('server.cjs'));console.log(h.digest('hex'))")
+                "const fs=require('fs'),crypto=require('crypto'),h=crypto.createHash('sha256');function walk(p){for(const n of fs.readdirSync(p).sort()){const f=p+'/'+n;fs.statSync(f).isDirectory()?walk(f):h.update(f).update(fs.readFileSync(f))}};for(const p of ['config','routes','services','middlewares','queues','jobs'])walk(p);for(const p of ['server.cjs','classifier-worker.cjs'])h.update(fs.readFileSync(p));console.log(h.digest('hex'))")
             version['database_runtime'] = command('docker', 'exec', entry['Id'], 'node', '-e',
                 "const m=require('mariadb');(async()=>{let c=await m.createConnection({host:process.env.DATABASE_HOST,user:process.env.DATABASE_USER,password:process.env.DATABASE_PASSWORD,database:process.env.DATABASE_NAME,port:Number(process.env.DATABASE_PORT||3306)});let r=await c.query('SELECT VERSION() AS version, @@max_connections AS max_connections, @@innodb_buffer_pool_size AS innodb_buffer_pool_size, @@collation_server AS collation_server');console.log(JSON.stringify(r[0],(_,v)=>typeof v==='bigint'?v.toString():v));await c.end()})().catch(()=>process.exit(1))")
         elif service == 'classifier':
@@ -105,7 +106,7 @@ if '--metadata' in sys.argv:
             version['model_hashes'] = command('docker', 'exec', entry['Id'], 'python', '-c',
                 "import os,hashlib,json,pathlib; base=pathlib.Path('/app/helper/mushroom_classifier'); names={'model':('MODEL_PATH','nammushroom_efficientnet_b0.pth'),'labels':('LABELS_PATH','labels.txt'),'catalog':('MUSHROOM_CATALOG_PATH','mushroom.json')}; paths={k:base/os.getenv(e,n) for k,(e,n) in names.items()}; print(json.dumps({k:hashlib.sha256(p.read_bytes()).hexdigest() for k,p in paths.items()}))")
             version['model_runtime'] = command('docker', 'exec', entry['Id'], 'python', '-c',
-                "import torch,json,os,pathlib; p=pathlib.Path('/app/helper/mushroom_classifier')/os.getenv('LABELS_PATH','labels.txt'); labels=[s for s in p.read_text().splitlines() if s.strip() and not s.strip().startswith('#')]; print(json.dumps({'architecture':'efficientnet_b0','class_count':len(labels),'requested_device':os.getenv('CLASSIFIER_DEVICE','auto'),'cuda_available':torch.cuda.is_available(),'cuda':torch.version.cuda,'cudnn':torch.backends.cudnn.version(),'torch':torch.__version__,'threads':torch.get_num_threads()}))")
+                "import torch,json,os,pathlib,urllib.request; p=pathlib.Path('/app/helper/mushroom_classifier')/os.getenv('LABELS_PATH','labels.txt'); labels=[s for s in p.read_text().splitlines() if s.strip() and not s.strip().startswith('#')]; health=json.load(urllib.request.urlopen('http://127.0.0.1:8001/health',timeout=5)); print(json.dumps({'architecture':'efficientnet_b0','class_count':len(labels),'requested_device':os.getenv('CLASSIFIER_DEVICE','auto'),'cuda_available':torch.cuda.is_available(),'cuda':torch.version.cuda,'cudnn':torch.backends.cudnn.version(),'torch':torch.__version__,'threads':health['threads']}))")
         elif service == 'db':
             version['server'] = command('docker', 'exec', entry['Id'], 'mariadb', '--version')
         elif service == 'redis':
@@ -139,6 +140,7 @@ emit({'type': 'collector', 'timestamp': time.time(), 'interval_seconds': 1,
       'memory_definition': 'host: MemTotal - MemAvailable; container working set: memory_stats.usage - inactive_file (Docker CLI convention)'})
 previous_host = host_cpu()
 previous_containers = {}
+last_runtime = 0
 deadline = time.monotonic()
 expires = deadline + duration if duration > 0 else float('inf')
 while time.monotonic() < expires:
@@ -179,5 +181,25 @@ while time.monotonic() < expires:
                   'networks': stats.get('networks', {}), 'blkio': stats.get('blkio_stats', {})})
         except Exception as error:
             emit({'type': 'error', 'timestamp': time.time(), 'container': container['Id'], 'error': str(error)})
+    if time.monotonic() - last_runtime >= 5:
+        last_runtime = time.monotonic()
+        for container in containers:
+            service = container['Labels'].get('com.docker.compose.service')
+            try:
+                info = docker('/containers/%s/json' % container['Id'])
+                state = info.get('State', {})
+                emit({'type': 'health', 'timestamp': time.time(), 'service': service,
+                      'status': state.get('Status'), 'health': state.get('Health', {}).get('Status'),
+                      'oom_killed': state.get('OOMKilled', False), 'restart_count': info.get('RestartCount', 0)})
+            except Exception as error:
+                emit({'type': 'error', 'timestamp': time.time(), 'container': container['Id'], 'error': str(error)})
+            if service not in ('api', 'classifier-worker'): continue
+            name = 'api' if service == 'api' else 'worker'
+            try:
+                result = subprocess.run(['docker', 'exec', container['Id'], 'cat', '/tmp/classifier-runtime-'+name+'.json'], capture_output=True, text=True, timeout=2, check=True)
+                sample = json.loads(result.stdout)
+                sample['sample_timestamp_ms'] = sample.pop('timestamp', None)
+                emit({'type': 'runtime', 'timestamp': time.time(), 'service': service, **sample})
+            except (OSError, ValueError, subprocess.SubprocessError): pass
     deadline += 1
     time.sleep(max(0, deadline - time.monotonic()))

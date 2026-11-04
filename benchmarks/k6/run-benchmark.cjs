@@ -5,7 +5,7 @@ const { spawn, execFile, execFileSync } = require('node:child_process');
 const { createRequire } = require('node:module');
 const { setTimeout: pause } = require('node:timers/promises');
 const { validateRateLimits, validateSessions } = require('./validate-sessions.cjs');
-const { knownHostKey } = require('./ssh-hosts.cjs');
+const { knownHostKey, sshAuthentication } = require('./ssh-hosts.cjs');
 const os = require('node:os');
 const { generator, monitoring, queryRange } = require('./report-metadata.cjs');
 
@@ -25,7 +25,8 @@ const imageHash = crypto.createHash('sha256').update(fs.readFileSync(image)).dig
 if (sessions.imageSha256 !== imageHash) throw Error('BENCHMARK_IMAGE must match the photo validated during seed');
 const sourceCount = process.env.BENCHMARK_SOURCE_IP_COUNT === undefined ? null : Number(process.env.BENCHMARK_SOURCE_IP_COUNT);
 if ((!smoke && sourceCount === null) || (sourceCount !== null && (!Number.isSafeInteger(sourceCount) || sourceCount < 1))) throw Error('Set BENCHMARK_SOURCE_IP_COUNT to the number of source IPs visible to the server');
-if (!smoke && (!process.env.SSH_HOST || !process.env.SSH_USER || !process.env.SSH_PASSWORD)) throw Error('Full benchmark requires SSH_HOST, SSH_USER and SSH_PASSWORD for resource collection');
+if (!smoke && (!process.env.SSH_HOST || !process.env.SSH_USER)) throw Error('Full benchmark requires SSH_HOST and SSH_USER for resource collection');
+if (process.env.SSH_HOST) sshAuthentication();
 if (mode === 'capacity' && !process.env.SSH_HOST) throw Error('Capacity mode requires SSH verification of the benchmark image');
 if (!smoke && !process.env.K6_PROMETHEUS_RW_SERVER_URL) throw Error('Full benchmark requires Prometheus remote write');
 if (fs.existsSync(output) && fs.readdirSync(output).length) throw Error('RESULTS_DIR must be a new or empty directory');
@@ -37,7 +38,7 @@ const prometheus = (process.env.BENCHMARK_PROMETHEUS_URL || 'http://127.0.0.1:90
 const grafana = (process.env.BENCHMARK_GRAFANA_URL || 'http://127.0.0.1:3000').replace(/\/$/, '');
 if (!smoke && new URL(process.env.K6_PROMETHEUS_RW_SERVER_URL).origin !== new URL(prometheus).origin) throw Error('Prometheus query and remote-write URLs must have the same origin');
 const metadata = { schema_version: 2, started_at: new Date().toISOString(), base_url: base, mode, run_id: sessions.runId,
-  profile: smoke ? 'smoke' : 'full', roles: sessions.counts, source_ips: process.env.BENCHMARK_SOURCE_IPS || 'operating-system default',
+  profile: smoke ? 'smoke' : process.env.BENCHMARK_CALIBRATION_VUS === '100' ? 'calibration-100-vu' : 'full', roles: sessions.counts, source_ips: process.env.BENCHMARK_SOURCE_IPS || 'operating-system default',
   source_ip_count_declared: sourceCount,
   rate_limits_declared: declaredRateLimits,
   generator: { platform: process.platform, node: process.version, k6: execFileSync(k6, ['version'], { encoding: 'utf8' }).trim(),
@@ -48,6 +49,12 @@ const metadata = { schema_version: 2, started_at: new Date().toISOString(), base
 const save = () => fs.writeFileSync(path.join(output, 'metadata.json'), JSON.stringify(metadata, null, 2));
 save();
 let ssh, monitor, resourceFile, stopped = false, remoteArgs, generatorTimer, generatorIoTimer, activeChild, interrupted = false, finishing = false, ioPending = false, generatorIoSeen = false;
+let monitorBuffer = '', safetyStop = null;
+const checkSafety = require('./resource-safety.cjs').createResourceSafety();
+function checkResourceSample(row) {
+  safetyStop ||= checkSafety(row);
+  if (safetyStop && activeChild) { metadata.safety_stop = safetyStop; activeChild.kill(); }
+}
 for (const signal of ['SIGINT', 'SIGTERM']) process.on(signal, () => { interrupted = true; if (activeChild) activeChild.kill(); });
 const generatorFile = fs.createWriteStream(path.join(output, 'generator-resources.ndjson'));
 let previousCpu;
@@ -96,7 +103,7 @@ async function startSampler() {
   metadata.generator.host_key_sha256 = crypto.createHash('sha256').update(key).digest('base64');
   ssh = new Client();
   await new Promise((resolve, reject) => ssh.once('ready', resolve).once('error', reject).connect({ host: process.env.SSH_HOST,
-    port, username: process.env.SSH_USER, password: process.env.SSH_PASSWORD,
+    port, username: process.env.SSH_USER, ...sshAuthentication(),
     hostVerifier: actual => actual.equals(key), readyTimeout: 15000, keepaliveInterval: 10000 }));
   const args = `--project ${project} --repo ${repo}`; remoteArgs = args;
   const before = Date.now();
@@ -123,7 +130,12 @@ async function startSampler() {
   await new Promise((resolve, reject) => ssh.exec(`exec python3 -u - ${args}`, (error, stream) => {
     if (error) return reject(error);
     monitor = stream; let first = '', ready = false;
-    stream.on('data', chunk => { resourceFile.write(chunk); if (!ready) { first += chunk; if (first.includes('\n')) { ready = true; resolve(); } } });
+    stream.on('data', chunk => {
+      resourceFile.write(chunk); monitorBuffer += chunk.toString();
+      const lines = monitorBuffer.split('\n'); monitorBuffer = lines.pop();
+      for (const line of lines) try { checkResourceSample(JSON.parse(line)); } catch (_) {}
+      if (!ready) { first += chunk; if (first.includes('\n')) { ready = true; resolve(); } }
+    });
     stream.stderr.on('data', chunk => process.stderr.write(`Sampler: ${chunk}`));
     stream.on('close', () => { stopped = true; if (!ready) reject(Error('Resource sampler failed to start')); });
     stream.end(sampler);
@@ -134,6 +146,7 @@ async function startSampler() {
 }
 async function run(phase) {
   if (interrupted) throw Error('Benchmark interrupted');
+  if (safetyStop) throw Error(safetyStop);
   if (metadata.sampler === 'ssh' && stopped) throw Error('Resource sampler stopped before test completion');
   if (hash(script) !== metadata.generator.script_sha256) throw Error('Benchmark script changed during the run; start a new results directory');
   const record = { id: phase, started_at: new Date().toISOString() }; metadata.runs.push(record); save();
@@ -142,7 +155,7 @@ async function run(phase) {
     BENCHMARK_PHASE: phase, SUMMARY_PATH: path.join(output, `${phase}.summary.json`), K6_NO_COLOR: 'true', K6_NO_USAGE_REPORT: 'true',
     K6_PROMETHEUS_RW_TREND_STATS: 'avg,med,p(95),p(99)' };
   if (phase === 'warmup' || smoke) env.SESSION_MS = '20000';
-  delete env.SSH_PASSWORD; delete env.BENCHMARK_PASSWORD;
+  delete env.SSH_PASSWORD; delete env.SSH_PRIVATE_KEY; delete env.SSH_PASSPHRASE; delete env.SSH_AUTH_SOCK; delete env.BENCHMARK_PASSWORD;
   const args = ['run', '--quiet', '--new-machine-readable-summary=false'];
   if (process.env.BENCHMARK_SOURCE_IPS) args.push('--local-ips', process.env.BENCHMARK_SOURCE_IPS);
   if (process.env.K6_PROMETHEUS_RW_SERVER_URL) args.push('--out', 'experimental-prometheus-rw');
@@ -156,6 +169,7 @@ async function run(phase) {
     });
   } finally { log.end(); record.finished_at = new Date().toISOString(); save(); }
   if (hash(script) !== metadata.generator.script_sha256) throw Error('Benchmark script changed during measurement; results are invalid');
+  if (safetyStop) throw Error(safetyStop);
   if (record.exit_code !== 0 && (phase !== 'measured' || record.exit_code !== 99)) throw Error(`${phase} failed; inspect ${phase}.log`);
   console.log(`Finished ${phase}: exit ${record.exit_code}`);
 }
@@ -183,8 +197,8 @@ async function main() {
     }
     if (!metadata.server.cpu_count || !metadata.server.memory?.MemTotal || !metadata.server.docker_version?.Version) throw Error('Missing server CPU, RAM or Docker version');
     const found = new Set(metadata.server.containers.map(item => item.service));
-    for (const name of ['api', 'db', 'redis', 'classifier']) if (!found.has(name)) throw Error(`Missing required service metadata: ${name}`);
-    for (const container of metadata.server.containers.filter(item => ['api', 'db', 'redis', 'classifier'].includes(item.service))) {
+    for (const name of ['api', 'db', 'redis', 'classifier', 'classifier-worker']) if (!found.has(name)) throw Error(`Missing required service metadata: ${name}`);
+    for (const container of metadata.server.containers.filter(item => ['api', 'db', 'redis', 'classifier', 'classifier-worker'].includes(item.service))) {
       for (const [name, version] of Object.entries(container.versions)) if (version.exit_code !== 0 || !version.stdout) throw Error(`Missing version metadata: ${container.service}/${name}`);
     }
   }

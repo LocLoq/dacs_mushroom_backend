@@ -3,8 +3,6 @@ const cors = require('cors');
 const http = require('http');
 const { Server } = require('socket.io');
 const { loadEnvironment } = require('./config/environment.cjs');
-const { PrismaClient } = require('@prisma/client');
-const { PrismaMariaDb } = require('@prisma/adapter-mariadb');
 const swaggerUi = require('swagger-ui-express');
 const YAML = require('yamljs');
 const path = require('path');
@@ -14,15 +12,8 @@ const { galleryMediaAccess } = require('./middlewares/galleryMedia');
 loadEnvironment();
 const { getRateLimiters, configureTrustProxy } = require('./middlewares/rateLimit');
 
-const adapter = new PrismaMariaDb({
-  host: process.env.DATABASE_HOST,
-  user: process.env.DATABASE_USER,
-  password: process.env.DATABASE_PASSWORD,
-  database: process.env.DATABASE_NAME,
-  port: parseInt(process.env.DATABASE_PORT) || 3306,
-  connectionLimit: 5
-});
-const prisma = new PrismaClient({ adapter });
+const database = require('./services/database').createDatabase(10);
+const prisma = database.prisma;
 
 const app = express();
 configureTrustProxy(app);
@@ -36,6 +27,13 @@ const server = http.createServer(app);
 const io = new Server(server, {
   cors: corsOptions
 });
+const Redis = require('ioredis');
+const { createAdapter } = require('@socket.io/redis-adapter');
+const socketPublisher = new Redis(process.env.REDIS_URL || 'redis://127.0.0.1:6379');
+const socketSubscriber = socketPublisher.duplicate();
+for (const client of [socketPublisher, socketSubscriber]) client.on('error', error => console.error('Socket Redis error:', error.message));
+io.adapter(createAdapter(socketPublisher, socketSubscriber));
+const stopRuntimeMetrics = require('./services/runtimeMetrics').start('api', database);
 
 const allRoles = ['admin', 'manager', 'staff'];
 const privilegedRoles = ['admin', 'manager'];
@@ -70,13 +68,8 @@ app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(swaggerDocument));
 app.use(require('./services/apiHelpers').errorHandler);
 
 const classifierQueue = require('./queues/mushroomClassifierQueue');
-const { createClassifierMonitor, cleanStaleClassifierFiles } = require('./services/classifierMonitor');
 const { activeRequests } = require('./services/classifierLifecycle');
 const { withDeadline } = require('./services/classifierHealth');
-const classifierWorker = classifierQueue.startWorker();
-const classifierMonitor = createClassifierMonitor({ prisma, queue: classifierQueue });
-classifierMonitor.start(classifierWorker);
-void cleanStaleClassifierFiles(prisma);
 
 require('./services/workflowEvents').configureWorkflowSocket(io);
 const notificationWorker = require('./queues/notificationQueue').startNotificationWorker(prisma);
@@ -117,8 +110,9 @@ async function shutdown() {
   for (const active of activeRequests.values()) active.controller.abort(Object.assign(new Error('Backend stopping'), { code: 'WORKER_SHUTDOWN' }));
   try {
     await withDeadline(async () => {
-      await classifierMonitor.stop(classifierWorker);
-      await Promise.all([classifierWorker.close(), classifierQueue.close(), notificationWorker.close(), new Promise((resolve) => io.close(resolve))]);
+      stopRuntimeMetrics();
+      await Promise.all([classifierQueue.close(), notificationWorker.close(), new Promise((resolve) => io.close(resolve))]);
+      socketPublisher.disconnect(); socketSubscriber.disconnect();
       await prisma.$disconnect();
     }, 10000, new Error('Backend shutdown timed out'));
   } catch (error) { console.error(error.message); }

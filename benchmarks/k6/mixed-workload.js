@@ -29,12 +29,13 @@ const layout = new SharedArray('virtual user assignments', () => {
 const photo = await openFile(__ENV.BENCHMARK_IMAGE);
 const base = __ENV.BASE_URL.replace(/\/$/, '');
 if (base !== meta[0].baseUrl) throw Error('BASE_URL must match authenticated session origin');
-if (Date.now() - Date.parse(meta[0].authenticatedAt) > 45 * 60 * 1000) throw Error('Sessions are older than 45 minutes; authenticate again');
 const smoke = meta[0].counts.guest === 6;
 const layoutOnly = __ENV.BENCHMARK_PHASE === 'layout';
 const preflight = __ENV.BENCHMARK_PHASE === 'preflight';
 const warmup = __ENV.BENCHMARK_PHASE === 'warmup';
+const calibration = __ENV.BENCHMARK_PHASE === 'measured' && __ENV.BENCHMARK_CALIBRATION_VUS === '100';
 const stages = smoke || warmup ? [{ duration: '5s', target: 10 }, { duration: '30s', target: 10 }, { duration: '5s', target: 0 }]
+  : calibration ? [{ duration: '10s', target: 100 }, { duration: '3m', target: 100 }, { duration: '10s', target: 0 }]
   : [{ duration: '2m', target: 1000 }, { duration: '2m', target: 3000 }, { duration: '2m', target: 5000 }, { duration: '2m', target: 10000 }, { duration: '30m', target: 10000 }, { duration: '2m', target: 0 }];
 export const options = {
   tags: { benchmark_run: meta[0].runId, test_phase: __ENV.BENCHMARK_PHASE || 'measured' },
@@ -84,14 +85,20 @@ const requests = new Counter('business_requests');
 const failures = new Counter('business_failures');
 const actions = new Counter('business_actions');
 const jobs = new Counter('classifier_jobs');
+const admissionRejected = new Counter('classifier_admission_rejected');
 const jobSuccess = new Rate('classifier_success');
 const queueTime = new Trend('classifier_queue_ms');
 const processingTime = new Trend('classifier_processing_ms');
 const totalTime = new Trend('classifier_total_ms');
+const modelTime = new Trend('classifier_model_ms');
+const preprocessTime = new Trend('classifier_preprocess_ms');
 const socketEvents = new Counter('socket_events');
 const pause = ms => new Promise(resolve => schedule(resolve, ms));
 
 export function setup() {
+  // k6 re-evaluates the init context for handleSummary after the run; checking
+  // session age there discards summaries of runs longer than 45 minutes.
+  if (Date.now() - Date.parse(meta[0].authenticatedAt) > 45 * 60 * 1000) throw Error('Sessions are older than 45 minutes; authenticate again');
   const expected = meta[0].counts, counts = { admin: 0, manager: 0, staff: 0, guest: 0 };
   const identities = new Set();
   for (const slot of layout) {
@@ -176,27 +183,37 @@ async function imageFile() {
 async function classify(user) {
   const start = Date.now();
   const res = await request(user, 'POST', '/api/mushroom-classifier/classify', 'classifier_submit', { image: await imageFile() }, 202, 'write');
-  if (res.status !== 202) { jobs.add(1, { role: user.role, outcome: 'rejected' }); jobSuccess.add(false, { role: user.role }); return; }
+  if (res.status !== 202) {
+    try { if (res.status === 503 && res.json('code') === 'CLASSIFIER_QUEUE_FULL') admissionRejected.add(1, { role: user.role }); } catch (_) {}
+    jobs.add(1, { role: user.role, outcome: 'rejected' }); jobSuccess.add(false, { role: user.role }); return;
+  }
   const jobId = res.json('jobId');
   if (!jobId) { jobs.add(1, { role: user.role, outcome: 'invalid' }); jobSuccess.add(false, { role: user.role }); return; }
   let dirty = true;
   const socket = connectSocket(user, '/', () => { dirty = true; });
   socket.onconnect = () => { socket.emit('subscribe_job', jobId); dirty = true; };
   const deadline = start + Number(__ENV.CLASSIFIER_DEADLINE_MS || 900000);
-  let lastPoll = 0, outcome = 'timeout';
+  let lastPoll = 0, outcome = 'timeout', nextPoll = 0, retryDelay = 5000;
   try {
     while (Date.now() < deadline) {
-      if (dirty || (!socket.connected && Date.now() - lastPoll >= 5000)) {
+      if (dirty || Date.now() >= nextPoll) {
         dirty = false; lastPoll = Date.now();
         const snapshot = await request(user, 'GET', `/api/mushroom-classifier/jobs/${jobId}`, 'classifier_job', undefined, 200, 'poll');
         if (snapshot.status === 200) {
+          retryDelay = 5000;
+          nextPoll = Date.now() + (socket.connected ? 15000 : 5000) + Math.random() * 1000;
           const data = snapshot.json('data');
           if (['SUCCEEDED', 'FAILED'].includes(data.status)) {
             outcome = data.status.toLowerCase();
             if (data.startedAt && data.queuedAt) queueTime.add(Date.parse(data.startedAt) - Date.parse(data.queuedAt), { role: user.role });
             if (data.completedAt && data.startedAt) processingTime.add(Date.parse(data.completedAt) - Date.parse(data.startedAt), { role: user.role });
+            if (Number.isFinite(data.result?.timings?.modelMs)) modelTime.add(data.result.timings.modelMs, { role: user.role });
+            if (Number.isFinite(data.result?.timings?.preprocessMs)) preprocessTime.add(data.result.timings.preprocessMs, { role: user.role });
             break;
           }
+        } else {
+          nextPoll = Date.now() + retryDelay + Math.random() * 1000;
+          retryDelay = Math.min(15000, retryDelay * 2);
         }
       }
       await pause(socket.connected ? 250 : 1000);

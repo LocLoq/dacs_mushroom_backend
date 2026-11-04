@@ -18,6 +18,8 @@ function classifierConfig(environment = process.env) {
         processingTimeoutMs: positiveInteger(environment, 'CLASSIFIER_PROCESSING_TIMEOUT_MS', timeoutMs + 30000),
         timeoutMs,
         pageSize: positiveInteger(environment, 'CLASSIFIER_MONITOR_PAGE_SIZE', 100),
+        concurrency: positiveInteger(environment, 'CLASSIFIER_WORKER_CONCURRENCY', 1),
+        admissionLimit: positiveInteger(environment, 'CLASSIFIER_ADMISSION_LIMIT', 100),
         restartLimit: positiveInteger(environment, 'CLASSIFIER_RESTART_LIMIT', 3),
         restartWindowMs: positiveInteger(environment, 'CLASSIFIER_RESTART_WINDOW_MS', 300000),
         restartBackoffMs: positiveInteger(environment, 'CLASSIFIER_RESTART_BACKOFF_MS', 2000),

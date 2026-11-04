@@ -22,7 +22,7 @@ function createClassifierQueue({ redisUrl = process.env.REDIS_URL || 'redis://12
         });
         worker.on('error', (error) => console.error('Classifier worker Redis error:', { code: error.code || 'REDIS_ERROR', message: error.message }));
         worker.on('stalled', (job) => console.error('Classifier job stalled:', { jobId: job.id, code: 'JOB_STALLED', attempt: job.attemptsMade }));
-        worker.process(1, processor || createMushroomClassifierProcessor({ checkHealth: producer.health.pythonReady, config }))
+        worker.process(config.concurrency, processor || createMushroomClassifierProcessor({ checkHealth: producer.health.pythonReady, config }))
             .catch((error) => console.error('Classifier worker initialization failed:', { code: error.code, message: error.message }));
         producer.worker = worker;
         return worker;
@@ -31,4 +31,5 @@ function createClassifierQueue({ redisUrl = process.env.REDIS_URL || 'redis://12
 }
 
 module.exports = createClassifierQueue();
+require('../services/classifierAdmission').setClient(module.exports.client);
 module.exports.createClassifierQueue = createClassifierQueue;

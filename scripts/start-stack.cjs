@@ -73,7 +73,10 @@ async function main() {
     await pythonSupervisor.start();
     console.log('Python classifier đã sẵn sàng; khởi động API Node...');
     try {
-        await run(process.execPath, ['server.cjs'], 'API Node');
+        await Promise.race([
+            run(process.execPath, ['server.cjs'], 'API Node'),
+            run(process.execPath, ['classifier-worker.cjs'], 'Classifier worker')
+        ]);
     } finally {
         stopAll();
     }
