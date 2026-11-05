@@ -13,7 +13,7 @@ if len(sys.argv) != 2:
     raise SystemExit('Usage: python analyze-results.py RESULTS_DIR')
 root = Path(sys.argv[1])
 metadata = json.loads((root / 'metadata.json').read_text(encoding='utf-8'))
-if metadata.get('profile') not in ('smoke', 'full', 'calibration-100-vu'):
+if metadata.get('profile') not in ('smoke', 'full', 'calibration-100-vu', 'steps-2000'):
     raise SystemExit('This analyzer expects a mixed-workload benchmark')
 
 def load_summary(phase):
@@ -120,12 +120,19 @@ if resource_file.exists() and run and run.get('finished_at'):
         except ValueError: continue
     offset = metadata.get('clock_offset_ms', 0) / 1000
     start, end = epoch(run['started_at']) + offset, epoch(run['finished_at']) + offset
-    for service in ('host', 'api', 'db', 'redis', 'classifier', 'classifier-worker'):
+    for service in ('host', 'api', 'db', 'redis', 'redis-cache', 'classifier', 'classifier-worker'):
         selected = [row for row in resources if start <= row.get('timestamp', 0) <= end and
                     (row.get('type') == 'host' if service == 'host' else row.get('type') == 'container' and row.get('service') == service)]
         resource_summary[service] = {'cpu_percent': describe([row.get('cpu_percent') for row in selected]),
                                      'memory_mib': describe([row.get('memory_used_bytes', 0) / 1048576 for row in selected])}
     resource_summary['collection_errors'] = sum(row.get('type') == 'error' for row in resources)
+    runtime_cache = [row.get('cache') for row in resources if row.get('type') == 'runtime' and row.get('service') == 'api' and start <= row.get('timestamp', 0) <= end and isinstance(row.get('cache'), dict)]
+    redis_cache = [row for row in resources if row.get('type') == 'cache_runtime' and start <= row.get('timestamp', 0) <= end]
+    if runtime_cache:
+        resource_summary['cache_counters'] = {key: runtime_cache[-1].get(key, 0) - runtime_cache[0].get(key, 0) for key in ('hit', 'miss', 'bypass', 'error', 'invalidation', 'coalesced')}
+    if redis_cache:
+        resource_summary['cache_redis'] = {'peak_used_memory_bytes': max(row.get('used_memory', 0) for row in redis_cache),
+                                           'evicted_keys': redis_cache[-1].get('evicted_keys', 0) - redis_cache[0].get('evicted_keys', 0)}
 
 def metric_values(name):
     return values(metrics.get(name, {}))
@@ -169,6 +176,8 @@ require(metadata.get('server', {}).get('os_release', {}).get('exit_code') == 0 a
 required_versions = {'api': ('runtime', 'npm', 'node_dependencies', 'source_hash', 'database_runtime', 'os_packages'),
                      'db': ('server', 'os_packages'), 'redis': ('server', 'os_packages'),
                      'classifier': ('python', 'python_dependencies', 'model_hashes', 'model_runtime', 'os_packages')}
+if metadata.get('roles', {}).get('guest') == 1795:
+    required_versions['redis-cache'] = ('server', 'memory', 'stats', 'os_packages')
 containers_by_service = {item.get('service'): item for item in metadata.get('server', {}).get('containers', [])}
 for service, names in required_versions.items():
     item = containers_by_service.get(service, {})
@@ -190,7 +199,7 @@ def time_coverage(times, start, end, interval):
     return {'fraction': min(1, covered / (end - start)), 'max_gap_seconds': max(gaps)}
 
 sampling = {}
-peak_vus, hold_seconds_10000 = None, None
+peak_vus, hold_seconds_10000, hold_seconds_2000 = None, None, None
 genrows = []
 if run and run.get('finished_at'):
     start, end = epoch(run['started_at']), epoch(run['finished_at'])
@@ -205,14 +214,20 @@ if run and run.get('finished_at'):
     sampling['generator_io'] = time_coverage([r['timestamp'] for r in genrows if r.get('type') == 'io' and 'timestamp' in r], start, end, 5)
     seriesfile = root / 'timeseries.json'
     series = json.loads(seriesfile.read_text(encoding='utf-8')) if seriesfile.exists() else {}
+    if metadata.get('roles', {}).get('guest') == 1795:
+        require('input_coverage' in series and 'error' not in series['input_coverage'], 'Độ phủ dữ liệu đầu vào từ Prometheus')
+        observed = series.get('input_coverage', {}).get('result', [])
+        analysis['input_coverage'] = {dimension: len({item.get('metric', {}).get('slot') for item in observed if item.get('metric', {}).get('dimension') == dimension and item.get('values')}) for dimension in ('species', 'batch', 'search', 'page')}
     for name in ('vus', 'rps', 'latency_p95', 'failures', 'classifier'):
         require(name in series and 'error' not in series[name], 'Truy vấn Prometheus ' + name)
     vus = series.get('vus', {}).get('result', [])
     vu_points = [(float(pair[0]), float(pair[1])) for item in vus for pair in item.get('values', [])]
     if vu_points:
         peak_vus = max(value for _, value in vu_points)
-        if metadata.get('profile') == 'full':
+        if metadata.get('profile') == 'full' and metadata.get('roles', {}).get('guest') != 1795:
             hold_seconds_10000 = 5 * sum(start + 480 <= stamp < start + 2280 and value >= 10000 for stamp, value in vu_points)
+        elif metadata.get('profile') == 'full':
+            hold_seconds_2000 = 5 * sum(start + 240 <= stamp < start + 540 and value >= 2000 for stamp, value in vu_points)
     sampling['prometheus_vus'] = time_coverage([float(pair[0]) for item in vus for pair in item.get('values', [])], start, end, 5)
     for name, check in sampling.items():
         require(check['fraction'] >= .95 and check['max_gap_seconds'] is not None and check['max_gap_seconds'] <= 15,
@@ -235,13 +250,34 @@ threshold_match = re.search(r"thresholds on metrics '([^']+)' have been crossed"
 crossed_thresholds = [name for name in core_threshold_names if threshold_match and name in threshold_match.group(1)]
 if crossed_thresholds:
     performance = False
+if metadata.get('roles', {}).get('guest') == 1795 and metrics:
+    isolation = metric_values('isolation_checks')
+    require(isolation.get('passes', 0) > 0 and isolation.get('rate') == 1, 'Kiểm tra cách ly cơ sở đạt 100%')
+    require(bool(metadata.get('cache_preparation')), 'Trạng thái cache trước tải được xác minh')
+    require(metric_values('cache_responses{outcome:error}').get('count', 0) == 0, 'Cache không lỗi trong lượt đo')
+    require('cache_counters' in resource_summary and 'cache_redis' in resource_summary, 'Số liệu cache middleware và Redis cache')
 stage_latency = {stage: metric_values('http_req_duration{kind:read,phase:business,stage:' + stage + '}')
                  for stage in ('ramp_1', 'ramp_2', 'ramp_3', 'ramp_4', 'hold', 'ramp_down', 'drain')}
+stage_metrics = []
+for stage, latency in stage_latency.items():
+    requests = metric_values('business_requests{stage:' + stage + '}').get('count', 0)
+    errors = metric_values('http_req_failed{phase:business,stage:' + stage + '}')
+    checks = metric_values('checks{phase:business,stage:' + stage + '}')
+    stage_metrics.append({'stage': stage, 'requests': requests, 'http_error_rate': errors.get('rate'),
+                          'checks_rate': checks.get('rate'), 'read_p95_ms': latency.get('p(95)'), 'read_p99_ms': latency.get('p(99)')})
+with (root / 'stages.csv').open('w', encoding='utf-8', newline='') as output:
+    writer = csv.DictWriter(output, fieldnames=['stage', 'requests', 'http_error_rate', 'checks_rate', 'read_p95_ms', 'read_p99_ms'])
+    writer.writeheader(); writer.writerows(stage_metrics)
 total_actions = sum(sum(row.values()) for row in (action_counts or {}).values())
 classifier_actions = sum(row['classify'] for row in (action_counts or {}).values())
 analysis.update({'performance_passed': performance, 'stage_read_latency_ms': stage_latency, 'sampling': sampling,
+                 'stage_metrics': stage_metrics,
                  'thresholds_crossed_in_k6_log': crossed_thresholds,
                  'peak_vus': peak_vus, 'hold_seconds_at_10000_vus': hold_seconds_10000,
+                 'hold_seconds_at_2000_vus': hold_seconds_2000,
+                 'isolation_checks': metric_values('isolation_checks'),
+                 'cache_responses': {outcome: metric_values('cache_responses{outcome:' + outcome + '}') for outcome in ('hit', 'miss', 'bypass', 'error')},
+                 'facility_requests': {str(slot): metric_values('business_requests{facility_slot:' + str(slot) + '}') for slot in range(10)},
                  'classifier_action_fraction': classifier_actions / total_actions if total_actions else None})
 readiness = {'schema_version': 2, 'ready': not missing, 'missing': missing, 'sampling': sampling,
              'performance_passed': performance, 'profile': metadata.get('profile'), 'incomplete': bool(metadata.get('incomplete'))}
@@ -252,7 +288,8 @@ environment = {'schema_version': 2, 'server_before': metadata.get('server'), 'se
                'mode': metadata.get('mode'), 'rate_limits_declared': metadata.get('rate_limits_declared'), 'rate_limits_effective': metadata.get('rate_limits_effective'),
                'roles': metadata.get('roles'), 'profile': metadata.get('profile'), 'runs': metadata.get('runs'),
                'methodology': {'think_time_seconds': [2, 5], 'classifier_action_probability': .05,
-                               'classifier_deadline_ms': 900000, 'load_profile_minutes': [2, 2, 2, 2, 30, 2]}}
+                               'classifier_deadline_ms': 900000, 'load_profile_minutes': [1, 1, 1, 1, 5, 1] if metadata.get('roles', {}).get('guest') == 1795 else [2, 2, 2, 2, 30, 2],
+                               'cache_case': metadata.get('cache_case'), 'distribution': metadata.get('distribution'), 'cache_preparation': metadata.get('cache_preparation')}}
 for name, value in [('versions.json', versions), ('environment.json', environment), ('readiness.json', readiness)]:
     (root / name).write_text(json.dumps(value, ensure_ascii=False, indent=2), encoding='utf-8')
 (root / 'readiness.md').write_text('# Kiểm tra dữ liệu báo cáo\n\n' + ('Đủ dữ liệu.\n' if not missing else 'Chưa đủ dữ liệu:\n\n' + ''.join('- ' + item + '\n' for item in missing)) +
@@ -270,7 +307,9 @@ lines = ['# Báo cáo benchmark', '', f"- Đủ dữ liệu viết báo cáo: {'
          f"- Thời gian tiền xử lý/model (ms, job có kết quả): {analysis['classifier_preprocess_ms'] or 'không có mẫu'} / {analysis['classifier_model_ms'] or 'không có mẫu'}",
          f"- Thao tác theo vai trò: {action_counts if action_counts is not None else 'chưa có summary'}", f"- Job theo vai trò: {job_outcomes if job_outcomes is not None else 'chưa có summary'}",
          f"- Số cặp vai trò/endpoint trong preflight: {len(coverage)}", '',
-         f"- VU quan sát tối đa: {peak_vus}; số giây giữ 10.000 VU theo mẫu 5 giây: {hold_seconds_10000}; tỷ lệ thao tác nhận diện: {analysis['classifier_action_fraction']}.",
+         f"- VU quan sát tối đa: {peak_vus}; số giây giữ 2.000 VU: {hold_seconds_2000}; số giây giữ 10.000 VU (dữ liệu cũ): {hold_seconds_10000}; tỷ lệ thao tác nhận diện: {analysis['classifier_action_fraction']}.",
+         f"- Cache: {metadata.get('cache_case')}; phân bố: {metadata.get('distribution')}; thống kê: {analysis['cache_responses']}; kiểm tra cách ly: {analysis['isolation_checks']}.",
+         f"- Request theo cơ sở (slot): {analysis['facility_requests']}.",
          '## Phiên bản và hệ thống', '',
          f"- Máy sinh tải: {system.get('platform', 'chưa thu thập')} {system.get('release', '')}, {system.get('architecture', '')}; CPU {system.get('cpu_model', 'chưa thu thập')} ({system.get('cpu_count', '?')} luồng), RAM {system.get('total_memory_bytes', '?')} byte.",
          f"- k6: {metadata.get('generator', {}).get('k6', 'chưa thu thập')}; Node: {metadata.get('generator', {}).get('node', 'chưa thu thập')}.",

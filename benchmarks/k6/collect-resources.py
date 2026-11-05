@@ -88,7 +88,8 @@ if '--metadata' in sys.argv:
                    'CLASSIFIER_MAX_CONCURRENCY', 'CLASSIFIER_DEVICE', 'CLASSIFIER_TIMEOUT_MS',
                    'CLASSIFIER_JOB_ATTEMPTS', 'CLASSIFIER_RETRY_BACKOFF_MS', 'CLASSIFIER_QUEUE_WAIT_MS',
                    'CLASSIFIER_PROCESSING_TIMEOUT_MS', 'CLASSIFIER_WORKER_CONCURRENCY',
-                   'CLASSIFIER_ADMISSION_LIMIT', 'CLASSIFIER_TORCH_THREADS', 'DATABASE_POOL_SIZE', 'NODE_ENV')
+                   'CLASSIFIER_ADMISSION_LIMIT', 'CLASSIFIER_TORCH_THREADS', 'DATABASE_POOL_SIZE', 'NODE_ENV',
+                   'CACHE_ENABLED', 'CACHE_NAMESPACE', 'CACHE_SPECIES_TTL', 'CACHE_GALLERY_TTL', 'CACHE_PROGRESS_TTL')
         version = {}
         if service in ('api', 'classifier-worker'):
             version['runtime'] = command('docker', 'exec', entry['Id'], 'node', '-e',
@@ -109,8 +110,10 @@ if '--metadata' in sys.argv:
                 "import torch,json,os,pathlib,urllib.request; p=pathlib.Path('/app/helper/mushroom_classifier')/os.getenv('LABELS_PATH','labels.txt'); labels=[s for s in p.read_text().splitlines() if s.strip() and not s.strip().startswith('#')]; health=json.load(urllib.request.urlopen('http://127.0.0.1:8001/health',timeout=5)); print(json.dumps({'architecture':'efficientnet_b0','class_count':len(labels),'requested_device':os.getenv('CLASSIFIER_DEVICE','auto'),'cuda_available':torch.cuda.is_available(),'cuda':torch.version.cuda,'cudnn':torch.backends.cudnn.version(),'torch':torch.__version__,'threads':health['threads']}))")
         elif service == 'db':
             version['server'] = command('docker', 'exec', entry['Id'], 'mariadb', '--version')
-        elif service == 'redis':
+        elif service in ('redis', 'redis-cache'):
             version['server'] = command('docker', 'exec', entry['Id'], 'redis-cli', 'INFO', 'server')
+            version['memory'] = command('docker', 'exec', entry['Id'], 'redis-cli', 'INFO', 'memory')
+            version['stats'] = command('docker', 'exec', entry['Id'], 'redis-cli', 'INFO', 'stats')
         version['os_packages'] = command('docker', 'exec', entry['Id'], 'sh', '-c', 'if command -v dpkg-query >/dev/null; then dpkg-query -W; elif command -v apk >/dev/null; then apk info -v; else exit 1; fi')
         services.append({'name': info['Name'], 'service': service, 'image': info['Config']['Image'],
                          'image_id': info['Image'], 'repo_digests': image.get('RepoDigests') or [],
@@ -193,6 +196,18 @@ while time.monotonic() < expires:
                       'oom_killed': state.get('OOMKilled', False), 'restart_count': info.get('RestartCount', 0)})
             except Exception as error:
                 emit({'type': 'error', 'timestamp': time.time(), 'container': container['Id'], 'error': str(error)})
+            if service == 'redis-cache':
+                try:
+                    values = {}
+                    for section in ('stats', 'memory'):
+                        info = subprocess.run(['docker', 'exec', container['Id'], 'redis-cli', 'INFO', section], capture_output=True, text=True, timeout=2, check=True)
+                        for line in info.stdout.splitlines():
+                            if ':' in line:
+                                key, value = line.split(':', 1)
+                                if key in ('keyspace_hits', 'keyspace_misses', 'evicted_keys', 'used_memory', 'maxmemory') and value.strip().isdigit(): values[key] = int(value.strip())
+                    emit({'type': 'cache_runtime', 'timestamp': time.time(), 'service': service, **values})
+                except (OSError, ValueError, subprocess.SubprocessError): pass
+                continue
             if service not in ('api', 'classifier-worker'): continue
             name = 'api' if service == 'api' else 'worker'
             try:

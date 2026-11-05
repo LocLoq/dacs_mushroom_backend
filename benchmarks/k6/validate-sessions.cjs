@@ -25,8 +25,9 @@ function validateSessions(data, baseUrl, now = Date.now()) {
   if (!data?.complete || data.baseUrl !== baseUrl || !Array.isArray(data.users)) throw Error('Sessions are incomplete or BASE_URL differs from login');
   if (data.runId !== undefined && !/^[a-z0-9]{4,16}$/.test(data.runId)) throw Error('Invalid benchmark run ID');
   const smoke = data.counts?.guest === 6;
-  const expected = smoke ? { admin: 1, manager: 1, staff: 2, guest: 6, facilities: 1, batches: 2 }
-    : { admin: 10, manager: 50, staff: 500, guest: 9440, facilities: 50, batches: 250 };
+  if (!smoke && data.historyScale !== undefined && data.historyScale !== 1 && process.env.BENCHMARK_ALLOW_REDUCED_SEED !== '1') throw Error('Full benchmark requires the complete history dataset');
+  const expected = smoke ? { admin: 1, manager: 1, staff: 2, guest: 6, facilities: 2, batches: 3 }
+    : { admin: 5, manager: 20, staff: 180, guest: 1795, facilities: 10, batches: 50 };
   for (const role of ['admin', 'manager', 'staff', 'guest']) if (data.counts?.[role] !== expected[role]) throw Error(`Unexpected ${role} count`);
   if (!Array.isArray(data.facilities) || data.facilities.length !== expected.facilities || !Array.isArray(data.batches) || data.batches.length !== expected.batches) throw Error('Unexpected benchmark dataset size');
   if (data.users.length !== expected.admin + expected.manager + expected.staff) throw Error('Unexpected internal account count');
@@ -40,19 +41,22 @@ function validateSessions(data, baseUrl, now = Date.now()) {
     if (claims.id !== user.id || claims.username !== user.username || claims.role !== user.role || !Number.isFinite(claims.exp) || claims.exp * 1000 < now + 80 * 60 * 1000) throw Error('Benchmark identity or token expiry mismatch');
   }
   const staffById = new Map(data.users.filter(user => user.role === 'staff').map(user => [user.id, user]));
-  const assignedStaff = new Set();
+  const assignedStaff = new Map();
   for (const user of data.users.filter(user => user.role !== 'staff')) {
-    if (!Array.isArray(user.assignments) || !user.assignments.length || (user.role === 'manager' && user.assignments.length !== expected.staff / expected.manager)) throw Error('Incomplete benchmark manager assignments');
+    if (!Array.isArray(user.assignments) || !user.assignments.length || (user.role === 'manager' && user.assignments.length !== (smoke ? 2 : expected.staff / expected.facilities))) throw Error('Incomplete benchmark manager assignments');
+    const uniqueAssignments = new Set();
     for (const assignment of user.assignments) {
       const staff = staffById.get(assignment.staffId);
       if (!staff || assignment.facilityId !== staff.facilityId || assignment.batchId !== staff.batchId || assignment.batchCode !== staff.batchCode || (user.role === 'manager' && assignment.facilityId !== user.facilityId)) throw Error('Invalid benchmark manager assignment');
       if (user.role === 'manager') {
-        if (assignedStaff.has(staff.id)) throw Error('Duplicate benchmark manager assignment');
-        assignedStaff.add(staff.id);
+        if (uniqueAssignments.has(staff.id)) throw Error('Duplicate benchmark manager assignment');
+        uniqueAssignments.add(staff.id);
+        assignedStaff.set(staff.id, (assignedStaff.get(staff.id) || 0) + 1);
       }
     }
   }
   if (assignedStaff.size !== expected.staff) throw Error('Some staff have no benchmark manager');
+  if ([...assignedStaff.values()].some(count => count !== (smoke ? 1 : 2))) throw Error('Each staff member must have the expected number of facility managers');
   return { smoke, expected };
 }
 module.exports = { validateBaseUrl, validateRateLimits, validateSessions };

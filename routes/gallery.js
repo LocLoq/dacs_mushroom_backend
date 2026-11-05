@@ -5,6 +5,7 @@ const { auditAction } = require('../middlewares/audit');
 const { fail, id, pagination, pageResponse, fields, textField, handle } = require('../services/apiHelpers');
 const { createGalleryUpload, removeUploads, removeStoredMedia, orderBy, publicImageSelect } = require('../services/gallery');
 const { requireBatchAccess, requireFacilityAccess } = require('../services/access');
+const { publicCache } = require('../services/publicCache');
 
 const createGalleryRouter = (parentModel, imageModel, parentField) => {
     const router = express.Router();
@@ -22,7 +23,8 @@ const createGalleryRouter = (parentModel, imageModel, parentField) => {
         res.vary('Authorization');
         next();
     }, 
-    optionalAuthenticateToken, 
+    optionalAuthenticateToken,
+    publicCache().middleware({ group: 'gallery', ttl: Number(process.env.CACHE_GALLERY_TTL || 30), key: req => ({ parentModel, id: id(req.params.id), ...pagination(req.query) }) }),
     handle(async (req, res) => {
         const parentId = id(req.params.id);
         const paging = pagination(req.query);

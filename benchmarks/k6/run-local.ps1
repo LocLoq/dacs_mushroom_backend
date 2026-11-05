@@ -4,7 +4,8 @@ param(
     [string]$Image = '.cache/k6-test/mushroom.jpg',
     [string]$K6 = '.cache/k6/k6-v2.3.0-windows-amd64/k6.exe',
     [string]$Python = 'C:/Users/loql/AppData/Local/Python/pythoncore-3.12-64/python.exe',
-    [switch]$Smoke
+    [switch]$Smoke,
+    [ValidateSet('All', 'Small', 'Main')][string]$Suite = 'All'
 )
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'smoke-readiness.ps1')
@@ -25,7 +26,7 @@ $key = Join-Path $env:USERPROFILE '.ssh/id_ed25519'
 $knownHosts = Join-Path $env:USERPROFILE '.ssh/known_hosts'
 if (-not (Test-Path -LiteralPath $key) -or -not (Test-Path -LiteralPath $knownHosts)) { throw 'SSH private key and verified known_hosts are required' }
 if (-not $Smoke) {
-    Write-Host 'Running an isolated 10-VU smoke test before the full benchmark.'
+    Write-Host 'Running an isolated 10-VU smoke test before the benchmark suite.'
     & powershell -NoProfile -File $PSCommandPath -Server $Server -SshUser $SshUser -Image $Image -K6 $K6 -Python $Python -Smoke
     if ($LASTEXITCODE -ne 0) { throw 'Smoke test failed; full benchmark was not started' }
 }
@@ -53,9 +54,12 @@ Remote "mkdir $remoteDir"
 Run 'scp' @('-o','BatchMode=yes','-o','StrictHostKeyChecking=yes',$archive,"$target`:$remoteDir/source.tar")
 Run 'scp' @('-o','BatchMode=yes','-o','StrictHostKeyChecking=yes',$Image,"$target`:$remoteDir/fixture.jpg")
 Remote "cd $remoteDir && tar -xf source.tar"
+$completedSmoke = $false
+try {
 Stack 'prepare'
 Stack 'seed' @($(if ($Smoke) { 'smoke' } else { 'full' }))
 Run 'scp' @('-o','BatchMode=yes','-o','StrictHostKeyChecking=yes',"$target`:$remoteDir/.cache/benchmark/$taskRun/manifest.json",(Join-Path $localCache 'manifest.json'))
+Run 'scp' @('-r','-o','BatchMode=yes','-o','StrictHostKeyChecking=yes',"$target`:$remoteDir/.cache/benchmark/$taskRun/index-evidence",$resultsRoot)
 $env:BENCHMARK_RUN_ID = $taskRun
 $env:BASE_URL = "http://$Server`:18080"
 $env:BENCHMARK_PASSWORD = (& ssh -o BatchMode=yes -o StrictHostKeyChecking=yes $target "cd $remoteDir && . ./.env.benchmark && printf '%s' `"`$BENCHMARK_PASSWORD`"")
@@ -76,7 +80,6 @@ $env:SSH_PRIVATE_KEY = $key
 $env:BENCHMARK_TOOLS = $toolDir
 $env:BENCHMARK_PYTHON = $Python
 $env:K6_PROMETHEUS_RW_SERVER_URL = 'http://127.0.0.1:9090/api/v1/write'
-try {
     $prometheusReady = $false
     try { $prometheusReady = ((Invoke-WebRequest -UseBasicParsing 'http://127.0.0.1:9090/-/ready' -TimeoutSec 3).StatusCode -eq 200) } catch {}
     if (-not $prometheusReady) {
@@ -86,53 +89,55 @@ try {
         Run 'docker' @('compose','-p','dacs-benchmark-monitoring','-f','benchmarks/k6/monitoring/compose.yaml','up','-d')
         Remove-Item Env:GRAFANA_BENCHMARK_PASSWORD
     }
-    if (-not $Smoke) {
-        $candidates = @()
-        foreach ($pair in @(@(1,4),@(1,2),@(1,1),@(2,1))) {
-            Stack 'configure' @($pair[0],$pair[1],10)
-            $raw = @(& ssh -o BatchMode=yes -o StrictHostKeyChecking=yes $target "cd $remoteDir && sh benchmarks/k6/remote-stack.sh calibrate $taskRun $($pair[0])")
-            if ($LASTEXITCODE -ne 0) { throw 'Classifier calibration failed' }
-            $data = $raw[-1] | ConvertFrom-Json
-            $candidates += [PSCustomObject]@{ concurrency=$pair[0]; threads=$pair[1]; throughput=$data.throughput; p95_ms=$data.p95_ms; errors=$data.errors; succeeded=$data.succeeded }
-        }
-        $candidates | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath (Join-Path $resultsRoot 'classifier-calibration.json') -Encoding UTF8
-        $best = $candidates | Sort-Object @{Expression='throughput';Descending=$true}, @{Expression='p95_ms';Descending=$false} | Select-Object -First 1
-        $poolResults = @()
-        foreach ($pool in @(10,20)) {
-            Stack 'configure' @($best.concurrency,$best.threads,$pool)
-            $since = (Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ')
-            $env:BENCHMARK_CALIBRATION_VUS = '100'
-            $env:RESULTS_DIR = Join-Path $resultsRoot "pool-$pool"
-            & node benchmarks/k6/run-benchmark.cjs
-            if ($LASTEXITCODE -notin @(0,99)) { throw "Pool calibration $pool failed" }
-            $summary = Get-Content -Raw -LiteralPath (Join-Path $env:RESULTS_DIR 'analysis.json') | ConvertFrom-Json
-            $poolErrors = & ssh -o BatchMode=yes -o StrictHostKeyChecking=yes $target "docker logs --since $since $taskRun-api-1 2>&1 | grep -c 'pool timeout: failed to retrieve a connection from pool' || true"
-            $poolResults += [PSCustomObject]@{ pool=$pool; pool_errors=[int]$poolErrors; p95_ms=$summary.read_latency_ms.'p(95)' }
-        }
-        Remove-Item Env:BENCHMARK_CALIBRATION_VUS
-        $poolResults | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath (Join-Path $resultsRoot 'pool-calibration.json') -Encoding UTF8
-        $chosen = $poolResults | Sort-Object pool_errors, p95_ms, pool | Select-Object -First 1
-        Stack 'configure' @($best.concurrency,$best.threads,$chosen.pool)
-        Authenticate
+    $cases = @()
+    if ($Smoke) {
+        Stack 'snapshot'
+        foreach ($cache in @('off','cold','warm')) { $cases += [PSCustomObject]@{ distribution='uniform'; cache=$cache; vus=0; name="smoke-$cache" } }
     }
-    $env:RESULTS_DIR = Join-Path $resultsRoot 'measured'
-    & node benchmarks/k6/run-benchmark.cjs
-    if ($Smoke -and $LASTEXITCODE -ne 0) { throw 'Smoke test did not pass; inspect metadata and logs' }
-    if ($LASTEXITCODE -notin @(0,99)) {
-        $metadataFile = Join-Path $env:RESULTS_DIR 'metadata.json'
-        if (Test-Path -LiteralPath $metadataFile) {
-            $failure = Get-Content -Raw -Encoding UTF8 -LiteralPath $metadataFile | ConvertFrom-Json
-            if ($failure.error) { throw "Benchmark incomplete: $($failure.error). See $metadataFile" }
+    else {
+        Stack 'snapshot'
+        if ($Suite -in @('All', 'Small')) {
+            foreach ($distribution in @('uniform', 'hot')) { foreach ($cache in @('off','cold','warm')) { foreach ($vus in @(5,10,25,50,100)) {
+                $cases += [PSCustomObject]@{ distribution=$distribution; cache=$cache; vus=$vus; name="small-$distribution-$cache-$vus" }
+            } } }
         }
-        throw "Benchmark incomplete; inspect metadata and logs in $env:RESULTS_DIR"
+        if ($Suite -in @('All', 'Main')) { foreach ($cache in @('cold','warm')) {
+            $cases += [PSCustomObject]@{ distribution='hot'; cache=$cache; vus=0; name="main-hot-$cache" }
+        } }
+    }
+    foreach ($case in $cases) {
+        Stack 'configure' @(2,1,10,$(if ($case.cache -eq 'off') { 'false' } else { 'true' }))
+        Stack 'reset'
+        Authenticate
+        $env:BENCHMARK_DISTRIBUTION = $case.distribution
+        $env:BENCHMARK_CACHE_CASE = $case.cache
+        $env:BENCHMARK_CASE_ID = "$taskRun-$($case.name)"
+        $env:BENCHMARK_RANDOM_SEED = '1234567'
+        if ($case.vus) { $env:BENCHMARK_STEP_VUS = [string]$case.vus } else { Remove-Item Env:BENCHMARK_STEP_VUS -ErrorAction SilentlyContinue }
+        $env:RESULTS_DIR = Join-Path $resultsRoot $case.name
+        & node benchmarks/k6/run-benchmark.cjs
+        $runExit = $LASTEXITCODE
+        if (($Smoke -and $runExit -ne 0) -or $runExit -notin @(0,99)) { throw "Benchmark incomplete ($runExit); inspect $env:RESULTS_DIR" }
+        $analysisFile = Join-Path $env:RESULTS_DIR 'analysis.json'
+        if (Test-Path -LiteralPath $analysisFile) {
+            $analysis = Get-Content -Raw -Encoding UTF8 -LiteralPath $analysisFile | ConvertFrom-Json
+            if ($analysis.isolation_checks.fails -gt 0) { throw "Facility isolation failed; inspect $analysisFile" }
+        }
+        if ($Smoke) {
+            $readiness = Get-Content -Raw -Encoding UTF8 -LiteralPath (Join-Path $env:RESULTS_DIR 'readiness.json') | ConvertFrom-Json
+            Assert-SmokeReadiness $readiness
+        }
     }
     if ($Smoke) {
-        $readiness = Get-Content -Raw -LiteralPath (Join-Path $env:RESULTS_DIR 'readiness.json') | ConvertFrom-Json
-        Assert-SmokeReadiness $readiness
         Stack 'cleanup'
+        $completedSmoke = $true
     }
-    Write-Host "Finished $taskRun; results: $env:RESULTS_DIR; k6 exit: $LASTEXITCODE"
+    Write-Host "Finished $taskRun; results: $resultsRoot"
 } finally {
+    if ($Smoke -and -not $completedSmoke) {
+        try { Stack 'stop' } catch { Write-Warning "Could not stop failed smoke project $taskRun; data was retained." }
+    }
+    if (-not $Smoke -and (Test-Path -LiteralPath $resultsRoot)) { & node benchmarks/k6/suite-summary.cjs $resultsRoot }
     Remove-Item Env:BENCHMARK_PASSWORD -ErrorAction SilentlyContinue
     Remove-Item Env:SSH_PRIVATE_KEY -ErrorAction SilentlyContinue
 }

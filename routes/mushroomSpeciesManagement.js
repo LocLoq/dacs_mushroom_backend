@@ -8,6 +8,7 @@ const prisma = global.prisma;
 const { authenticateToken, optionalAuthenticateToken, authorizeRoles } = require('../middlewares/auth');
 const { createGalleryRouter } = require('./gallery');
 const { galleryInclude, publicGalleryInclude, withGallery, removeStoredMedia } = require('../services/gallery');
+const { publicCache } = require('../services/publicCache');
 router.use(createGalleryRouter('mushroom', 'mushroomImage', 'mushroomId'));
 router.use((req, res, next) => {
     if (['GET', 'HEAD'].includes(req.method)) {
@@ -37,7 +38,7 @@ const mushroomData = (body) => {
 
 // 1. API tìm kiếm và lấy danh sách công khai
 // Hỗ trợ phân trang (tối đa 50 item/page) và query search
-router.get('/', optionalAuthenticateToken, handle(async (req, res) => {
+router.get('/', optionalAuthenticateToken, publicCache().middleware({ group: 'species', ttl: Number(process.env.CACHE_SPECIES_TTL || 60), key: req => ({ ...pagination(req.query, 50, 10), search: req.query.search === undefined ? '' : textField(req.query.search, 'search', Infinity, true) }) }), handle(async (req, res) => {
     const paging = pagination(req.query, 50, 10);
     const { limit, skip } = paging;
     const search = req.query.search === undefined ? '' : textField(req.query.search, 'search', Infinity, true);
@@ -65,7 +66,7 @@ router.get('/', optionalAuthenticateToken, handle(async (req, res) => {
     res.json(pageResponse(mushrooms.map(withGallery), totalItems, paging));
 }));
 
-router.get('/:id', optionalAuthenticateToken, handle(async (req, res) => {
+router.get('/:id', optionalAuthenticateToken, publicCache().middleware({ group: 'species', ttl: Number(process.env.CACHE_SPECIES_TTL || 60), key: req => ({ id: parseId(req.params.id) }) }), handle(async (req, res) => {
     const mushroom = await prisma.mushroom.findUnique({ where: { id: parseId(req.params.id) }, include: req.user ? galleryInclude : publicGalleryInclude });
     if (!mushroom) fail(404, 'Không tìm thấy giống nấm');
     res.json({ data: withGallery(mushroom) });

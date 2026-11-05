@@ -248,6 +248,7 @@ model CultivationBatch {
 
   @@index([startDate])
   @@index([facilityId, startDate])
+  @@index([facilityId, startDate, id], map: "bench_batch_facility_start_id")
   @@index([mushroomId, startDate])
   @@index([status, startDate])
   @@map("cultivation_batches")
@@ -273,6 +274,7 @@ model Task {
 
   @@index([status, dueAt])
   @@index([assigneeUserId, status])
+  @@index([assigneeUserId, status, dueAt], map: "bench_task_assignee_status_due")
   @@index([batchId])
   @@map("tasks")
 }
@@ -292,6 +294,7 @@ model CultivationCareLog {
   batch CultivationBatch @relation(fields: [batchId], references: [id], onDelete: Cascade)
   images CareLogImage[]
 
+  @@index([batchId, recordedAt, id], map: "bench_care_batch_recorded_id")
   @@map("cultivation_care_logs")
 }
 
@@ -312,6 +315,7 @@ model GrowthProgressRecord {
   images GrowthProgressImage[]
 
   @@index([batchId, recordedAt])
+  @@index([batchId, recordedAt, id], map: "bench_growth_batch_recorded_id")
   @@map("growth_progress_records")
 }
 

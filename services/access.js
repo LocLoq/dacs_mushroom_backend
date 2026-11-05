@@ -85,4 +85,4 @@ const batchAccessMiddleware = handle(async (req, res, next) => {
     next();
 });
 const workflowTransaction = (client, callback) => client.$transaction(callback, { isolationLevel: 'ReadCommitted' });
-module.exports = { workflowTransaction, batchScope, facilityScope, managedStaffScope, taskScope, lockFacility, requireBatchAccess, requireTaskAccess, requireFacilityAccess, requireManagerAssignee, batchAccessMiddleware };
+module.exports = { workflowTransaction, batchScope, facilityScope, managedStaffScope, taskScope, lockFacility, requireBatchAccess, requireTaskAccess, requireFacilityAccess, requireManagerFacility, requireManagerAssignee, batchAccessMiddleware };

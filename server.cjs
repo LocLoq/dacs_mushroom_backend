@@ -21,7 +21,7 @@ const port = process.env.PORT || 8080;
 const corsOrigins = (process.env.CORS_ALLOWED_ORIGINS || '').split(',').map((item) => item.trim()).filter(Boolean);
 const corsOrigin = corsOrigins.length ? corsOrigins : '*';
 const corsOptions = { origin: corsOrigin, allowedHeaders: ['Authorization', 'Content-Type', 'Accept', 'X-Tunnel-Skip-AntiPhishing-Page'],
-  exposedHeaders: ['Content-Disposition', 'RateLimit', 'RateLimit-Policy', 'Retry-After'] };
+  exposedHeaders: ['Content-Disposition', 'RateLimit', 'RateLimit-Policy', 'Retry-After', 'X-Cache'] };
 
 const server = http.createServer(app);
 const io = new Server(server, {
@@ -45,6 +45,7 @@ global.privilegedRoles = privilegedRoles;
 
 app.use(cors(corsOptions));
 app.use('/api', auditMiddleware, getRateLimiters().api);
+app.use('/api', require('./middlewares/cacheInvalidation').cacheInvalidation);
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 app.use('/uploads', galleryMediaAccess, express.static(path.join(__dirname, 'uploads')));
@@ -113,6 +114,7 @@ async function shutdown() {
       stopRuntimeMetrics();
       await Promise.all([classifierQueue.close(), notificationWorker.close(), new Promise((resolve) => io.close(resolve))]);
       socketPublisher.disconnect(); socketSubscriber.disconnect();
+      require('./services/publicCache').publicCache().close();
       await prisma.$disconnect();
     }, 10000, new Error('Backend shutdown timed out'));
   } catch (error) { console.error(error.message); }

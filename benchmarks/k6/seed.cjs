@@ -56,9 +56,13 @@ async function seed() {
   if (fs.existsSync(manifestPath) || collisions.some(Boolean)) throw Error('Run ID already exists; select a new ID');
   const smoke = process.env.BENCHMARK_PROFILE === 'smoke';
   const counts = smoke ? { admin: 1, manager: 1, staff: 2, guest: 6, batchesPerFacility: 2 }
-    : { admin: 10, manager: 50, staff: 500, guest: 9440, batchesPerFacility: 5 };
+    : { admin: 5, manager: 20, staff: 180, guest: 1795, batchesPerFacility: 5 };
+  const historyScale = Number(process.env.BENCHMARK_HISTORY_SCALE || 1);
+  if (!Number.isFinite(historyScale) || historyScale <= 0 || historyScale > 1) throw Error('BENCHMARK_HISTORY_SCALE must be in (0,1]');
   const manifest = { version: 1, runId, database, counts, createdAt: new Date().toISOString(), image: path.resolve(process.env.BENCHMARK_IMAGE), imageMime: image.mime,
     imageSha256: crypto.createHash('sha256').update(image.bytes).digest('hex'), seedSha256: crypto.createHash('sha256').update(fs.readFileSync(__filename)).digest('hex'), users: [], facilities: [], batches: [] };
+  manifest.historyScale = historyScale;
+  const historyDate = new Date(Date.now() - 7 * 86400000);
   save(manifest, true);
   const passwordHash = await bcrypt.hash(password, 10);
   const roles = {};
@@ -73,26 +77,52 @@ async function seed() {
     }
     save(manifest);
   }
-  const mushroom = await prisma.mushroom.create({ data: { scientificName: `${prefix}Pleurotus`, commonName: 'Nấm sò benchmark', family: 'Pleurotaceae', genus: 'Pleurotus', edibilityStatus: 'EDIBLE' } });
+  const speciesCount = smoke ? 2 : 200;
+  manifest.species = [];
+  manifest.searchTerms = ['Benchmark', 'Family', ...Array.from({ length: 28 }, (_, i) => `group${String(i).padStart(2, '0')}`), ...Array.from({ length: 10 }, (_, i) => `missing${String(i).padStart(2, '0')}`)];
+  for (let i = 0; i < speciesCount; i++) {
+    const species = await prisma.mushroom.create({ data: { scientificName: `${prefix}species_${String(i).padStart(3, '0')}`, commonName: `Benchmark ${manifest.searchTerms[2 + i % 28]} ${i}`, family: `Family${i % 10}`, genus: `Genus${i % 20}`, edibilityStatus: 'EDIBLE' } });
+    const photo = storedImage('gallery', image);
+    await prisma.mushroomImage.create({ data: { mushroomId: species.id, ...photo, isPublic: true, isCover: true, uploadedByUserId: users.admin[0].id } });
+    manifest.species.push({ id: species.id, publicImage: photo.imageUrl });
+  }
+  const mushroom = { id: manifest.species[0].id };
   manifest.mushroomId = mushroom.id;
-  const publicPhoto = storedImage('gallery', image);
-  await prisma.mushroomImage.create({ data: { mushroomId: mushroom.id, ...publicPhoto, isPublic: true, isCover: true, uploadedByUserId: users.admin[0].id } });
-  for (let i = 0; i < counts.manager; i++) {
-    const manager = users.manager[i];
-    const facility = await prisma.productionFacility.create({ data: { name: `${prefix}facility_${i}`, address: 'Benchmark', facilityType: 'HOUSEHOLD', mushrooms: { connect: { id: mushroom.id } } } });
+  const facilityCount = smoke ? 1 : 10;
+  const managersPerFacility = smoke ? 1 : 2;
+  for (let i = 0; i < facilityCount; i++) {
+    const managers = users.manager.slice(i * managersPerFacility, (i + 1) * managersPerFacility);
+    const manager = managers[0];
+    const facilitySpecies = manifest.species.slice(i * (smoke ? 1 : 20), (i + 1) * (smoke ? 1 : 20));
+    const facility = await prisma.productionFacility.create({ data: { name: `${prefix}facility_${i}`, address: 'Benchmark', facilityType: 'HOUSEHOLD', mushrooms: { connect: facilitySpecies.map(row => ({ id: row.id })) } } });
     manifest.facilities.push(facility.id);
-    await prisma.facilityManager.create({ data: { facilityId: facility.id, userId: manager.id, grantedByUserId: users.admin[0].id } });
+    for (const person of managers) await prisma.facilityManager.create({ data: { facilityId: facility.id, userId: person.id, grantedByUserId: users.admin[0].id } });
     await prisma.facilityImage.create({ data: { facilityId: facility.id, ...storedImage('gallery', image), isPublic: false, uploadedByUserId: manager.id } });
     const batches = [];
     for (let j = 0; j < counts.batchesPerFacility; j++) {
-      const batch = await prisma.cultivationBatch.create({ data: { batchCode: `${prefix}${i}_${j}`, facilityId: facility.id, mushroomId: mushroom.id, startDate: new Date(), status: 'FRUITING' } });
-      batches.push(batch); manifest.batches.push({ id: batch.id, code: batch.batchCode, facilityId: facility.id });
+      const batchSpecies = facilitySpecies[j % facilitySpecies.length];
+      const batch = await prisma.cultivationBatch.create({ data: { batchCode: `${prefix}${i}_${j}`, facilityId: facility.id, mushroomId: batchSpecies.id, startDate: new Date(), status: 'FRUITING' } });
+      batches.push(batch); manifest.batches.push({ id: batch.id, code: batch.batchCode, facilityId: facility.id, mushroomId: batchSpecies.id });
       await prisma.growthProgressRecord.create({ data: { batchId: batch.id, stage: 'FRUITING', notes: prefix, createdByUserId: manager.id } });
       await prisma.harvestRecord.create({ data: { batchId: batch.id, totalYieldKg: 1, notes: prefix, createdByUserId: manager.id } });
       await prisma.batchExpense.create({ data: { batchId: batch.id, name: prefix, category: 'MATERIAL', quantity: 1, unit: 'kg', unitPrice: 10, amount: 10, incurredAt: new Date(), createdByUserId: manager.id } });
       await prisma.batchSale.create({ data: { batchId: batch.id, quantityKg: 1, unitPrice: 20, amount: 20, soldAt: new Date(), createdByUserId: manager.id } });
+      if (smoke) {
+        await prisma.harvestRecord.create({ data: { batchId: batch.id, totalYieldKg: 1, harvestedAt: historyDate, createdByUserId: manager.id } });
+        await prisma.batchExpense.create({ data: { batchId: batch.id, name: prefix, category: 'MATERIAL', quantity: 1, unit: 'kg', unitPrice: 10, amount: 10, incurredAt: historyDate, createdByUserId: manager.id } });
+        await prisma.batchSale.create({ data: { batchId: batch.id, quantityKg: 1, unitPrice: 20, amount: 20, soldAt: historyDate, createdByUserId: manager.id } });
+      } else {
+        const date = historyDate;
+        const rows = (count, build) => Array.from({ length: Math.max(1, Math.floor(count * historyScale)) }, (_, n) => build(n));
+        await prisma.cultivationCareLog.createMany({ data: rows(1000, () => ({ batchId: batch.id, actionType: 'WATERING', notes: prefix, recordedAt: date, createdByUserId: manager.id })) });
+        await prisma.growthProgressRecord.createMany({ data: rows(100, () => ({ batchId: batch.id, stage: 'FRUITING', notes: prefix, recordedAt: date, createdByUserId: manager.id })) });
+        await prisma.harvestRecord.createMany({ data: rows(100, () => ({ batchId: batch.id, totalYieldKg: 1, harvestedAt: date, createdByUserId: manager.id })) });
+        await prisma.batchExpense.createMany({ data: rows(200, () => ({ batchId: batch.id, name: prefix, category: 'MATERIAL', quantity: 1, unit: 'kg', unitPrice: 10, amount: 10, incurredAt: date, createdByUserId: manager.id })) });
+        await prisma.batchSale.createMany({ data: rows(200, () => ({ batchId: batch.id, quantityKg: 1, unitPrice: 20, amount: 20, soldAt: date, createdByUserId: manager.id })) });
+        await prisma.task.createMany({ data: rows(100, n => ({ id: crypto.randomUUID(), title: `${prefix}history_${i}_${j}_${n}`, batchId: batch.id, createdByUserId: manager.id })) });
+      }
     }
-    const each = counts.staff / counts.manager;
+    const each = counts.staff / facilityCount;
     const assignments = [];
     for (let j = 0; j < each; j++) {
       const member = users.staff[i * each + j], batch = batches[j % batches.length];
@@ -104,16 +134,40 @@ async function seed() {
       Object.assign(manifest.users.find(row => row.id === member.id), { facilityId: facility.id, batchId: batch.id, batchCode: batch.batchCode, taskId: task.id, careId: care.id, notificationId: notice.id, careImage: (await prisma.careLogImage.findFirst({ where: { careLogId: care.id } })).imageUrl });
       assignments.push({ facilityId: facility.id, batchId: batch.id, batchCode: batch.batchCode, staffId: member.id });
     }
-    Object.assign(manifest.users.find(row => row.id === manager.id), { ...assignments[0], assignments });
+    for (const person of managers) Object.assign(manifest.users.find(row => row.id === person.id), { ...assignments[0], assignments });
     save(manifest);
   }
+  if (smoke) {
+    const admin = users.admin[0];
+    const facility = await prisma.productionFacility.create({ data: { name: `${prefix}foreign_facility`, address: 'Benchmark', facilityType: 'HOUSEHOLD' } });
+    const batch = await prisma.cultivationBatch.create({ data: { batchCode: `${prefix}foreign`, facilityId: facility.id, mushroomId: mushroom.id, startDate: new Date(), status: 'FRUITING' } });
+    const care = await prisma.cultivationCareLog.create({ data: { batchId: batch.id, actionType: 'WATERING', notes: prefix, createdByUserId: admin.id, images: { create: storedImage('care-logs', image) } } });
+    const task = await prisma.task.create({ data: { title: `${prefix}foreign_task`, batchId: batch.id, createdByUserId: admin.id } });
+    manifest.facilities.push(facility.id);
+    manifest.batches.push({ id: batch.id, code: batch.batchCode, facilityId: facility.id, mushroomId: mushroom.id });
+    manifest.foreignFixtures = [{ facilityId: facility.id, taskId: task.id, careImage: (await prisma.careLogImage.findFirst({ where: { careLogId: care.id } })).imageUrl }];
+  }
   const staffRows = manifest.users.filter(row => row.role === 'staff');
+  {
+    const amountRows = smoke ? 1 : Math.max(1, Math.floor(200 * historyScale));
+    const harvestRows = smoke ? 1 : Math.max(1, Math.floor(100 * historyScale));
+    manifest.verification = {
+      from: new Date(historyDate.getTime() - 1000).toISOString(),
+      to: new Date(historyDate.getTime() + 1000).toISOString(),
+      facilities: Object.fromEntries(manifest.facilities.slice(0, facilityCount).map(facilityId => [facilityId, {
+        batches: counts.batchesPerFacility,
+        revenue: (counts.batchesPerFacility * amountRows * 20).toFixed(2),
+        totalCost: (counts.batchesPerFacility * amountRows * 10).toFixed(2),
+        totalHarvestKg: counts.batchesPerFacility * harvestRows
+      }]))
+    };
+  }
   const adminRows = manifest.users.filter(row => row.role === 'admin');
   for (let i = 0; i < adminRows.length; i++) {
     const assignments = staffRows.filter((_, index) => index % adminRows.length === i).map(row => ({ facilityId: row.facilityId, batchId: row.batchId, batchCode: row.batchCode, staffId: row.id }));
     Object.assign(adminRows[i], { ...assignments[0], assignments });
   }
-  manifest.publicImage = publicPhoto.imageUrl;
+  manifest.publicImage = manifest.species[0].publicImage;
   manifest.complete = true;
   save(manifest);
   console.log(`Seed complete: ${manifest.users.length} accounts, ${manifest.facilities.length} facilities, ${manifest.batches.length} batches. Manifest: ${manifestPath}`);

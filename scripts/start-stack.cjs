@@ -47,6 +47,10 @@ async function waitForClassifier(signal) {
 }
 
 async function main() {
+    if (process.env.CACHE_ENABLED === 'true' && !process.env.CACHE_REDIS_URL) {
+        process.env.CACHE_REDIS_URL = 'redis://127.0.0.1:6380';
+        console.log('Redis cache: 127.0.0.1:6380 (riêng với Redis hàng đợi); nếu không kết nối được API sẽ đọc database.');
+    }
     await run(isWindows ? 'cmd.exe' : 'npm', isWindows ? ['/d', '/s', '/c', 'npm run prisma:generate'] : ['run', 'prisma:generate'], 'Prisma');
     if (process.env.SKIP_SEED !== '1') await run(isWindows ? 'cmd.exe' : 'npm', isWindows ? ['/d', '/s', '/c', 'npm run db:seed'] : ['run', 'db:seed'], 'Seed dữ liệu demo');
 

@@ -14,7 +14,9 @@ if (!Number.isFinite(seconds) || seconds <= 10 || seconds > 86400) throw Error('
 const origin = process.env.BENCHMARK_PROMETHEUS_URL || 'http://127.0.0.1:9090';
 const base = new URL(origin);
 if (!['http:', 'https:'].includes(base.protocol) || base.username || base.password || base.search || base.hash) throw Error('Invalid Prometheus URL');
-const selector = `benchmark_run="${metadata.run_id}",test_phase="measured"`;
+const measurementId = metadata.measurement_id || metadata.run_id;
+if (!/^[a-z0-9_-]{4,80}$/.test(measurementId)) throw Error('Invalid measurement ID');
+const selector = `benchmark_run="${measurementId}",test_phase="measured"`;
 const range = `[${seconds}s] @ ${at}`;
 const counter = name => `${name}{${selector}}${range}`;
 const expressions = {

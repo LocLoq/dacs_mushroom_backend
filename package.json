@@ -18,7 +18,8 @@
     "start:local:push": "node scripts/start-local-push.cjs",
     "push:test": "node scripts/test-local-push.cjs",
     "db:migrate:firebase": "node scripts/migrate-firebase-push.cjs",
-    "db:migrate:push-origin": "node scripts/migrate-push-origin.cjs"
+    "db:migrate:push-origin": "node scripts/migrate-push-origin.cjs",
+    "db:migrate:cache-indexes": "node scripts/migrate-cache-indexes.cjs"
   },
   "dependencies": {
     "@prisma/adapter-mariadb": "^7.9.1",

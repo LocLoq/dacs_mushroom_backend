@@ -7,6 +7,7 @@ const { auditAction } = require('../middlewares/audit');
 const { authenticateToken, authorizeRoles } = require('../middlewares/auth');
 const { financialSummary, financialSeries } = require('../services/financials');
 const { fail, id, pagination, pageResponse, textField, dateField, handle } = require('../services/apiHelpers');
+const { facilityScope, requireManagerFacility } = require('../services/access');
 
 const router = express.Router();
 const prisma = global.prisma;
@@ -33,7 +34,7 @@ const toDate = (value, endOfDay = false) => {
         : validated;
 };
 
-const getFilters = (query) => {
+const getFilters = (query, user) => {
     const now = new Date();
     const vietnamYear = new Date(now.getTime() + 7 * 3600000).getUTCFullYear();
     const defaultFrom = new Date(`${vietnamYear}-01-01T00:00:00.000+07:00`);
@@ -51,10 +52,11 @@ const getFilters = (query) => {
     if (from > to || to - from > maxRange || (status !== undefined && !allowedStatuses.has(status)) || !['day', 'month'].includes(groupBy)) {
         fail(400, 'Bộ lọc báo cáo không hợp lệ hoặc vượt quá 5 năm');
     }
-    return { from, to, facilityId, mushroomId, status, groupBy, ...paging };
+    return { from, to, facilityId, mushroomId, status, groupBy, ...paging, facilityScope: user?.role === 'manager' ? facilityScope(user) : {} };
 };
 
 const batchWhere = (filters) => ({
+    ...(Object.keys(filters.facilityScope || {}).length && { facility: filters.facilityScope }),
     ...(filters.facilityId && { facilityId: filters.facilityId }),
     ...(filters.mushroomId && { mushroomId: filters.mushroomId }),
     ...(filters.status && { status: filters.status }),
@@ -64,6 +66,7 @@ const batchWhere = (filters) => ({
 const harvestWhere = (filters) => ({
     harvestedAt: { gte: filters.from, lte: filters.to },
     batch: {
+        ...(Object.keys(filters.facilityScope || {}).length && { facility: filters.facilityScope }),
         ...(filters.facilityId && { facilityId: filters.facilityId }),
         ...(filters.mushroomId && { mushroomId: filters.mushroomId }),
         ...(filters.status && { status: filters.status })
@@ -111,6 +114,7 @@ const getClassifierRows = async (filters, skip = 0, take = 20) => prisma.classif
 });
 
 const financialBatchWhere = (filters) => ({
+    ...(Object.keys(filters.facilityScope || {}).length && { facility: filters.facilityScope }),
     ...(filters.facilityId ? { facilityId: filters.facilityId } : {}),
     ...(filters.mushroomId ? { mushroomId: filters.mushroomId } : {}),
     ...(filters.status ? { status: filters.status } : {})
@@ -150,7 +154,7 @@ const getAuditRows = async (filters, skip = 0, take = 20) => prisma.auditLog.fin
 const getOverview = async (filters) => {
     const cultivationWhere = batchWhere(filters);
     const [facilities, species, batchCount, statusBreakdown, harvestAggregate, overdueBatches, classifierRows, auditRows, harvestRows] = await Promise.all([
-        prisma.productionFacility.count({ where: filters.facilityId ? { id: filters.facilityId } : {} }),
+        prisma.productionFacility.count({ where: { ...filters.facilityScope, ...(filters.facilityId ? { id: filters.facilityId } : {}) } }),
         prisma.mushroom.count({ where: filters.mushroomId ? { id: filters.mushroomId } : {} }),
         prisma.cultivationBatch.count({ where: cultivationWhere }),
         prisma.cultivationBatch.groupBy({ by: ['status'], where: cultivationWhere, _count: { _all: true }, _avg: { defectRate: true } }),
@@ -175,10 +179,13 @@ const getOverview = async (filters) => {
     };
 };
 
-const reportHandler = (action, handler) => [auditAction(action, { entityType: 'Report' }), authenticateToken, authorizeRoles(...global.privilegedRoles), handle(handler)];
+const reportHandler = (action, handler) => [auditAction(action, { entityType: 'Report' }), authenticateToken, authorizeRoles(...global.privilegedRoles), handle(async (req, _res, next) => {
+    if (req.user.role === 'manager' && req.query.facilityId !== undefined) await requireManagerFacility(prisma, req.user, id(req.query.facilityId));
+    next();
+}), handle(handler)];
 
 router.get('/financial', ...reportHandler('REPORT_FINANCIAL_VIEW', async (req, res) => {
-    const filters = getFilters(req.query);
+    const filters = getFilters(req.query, req.user);
     const [totalItems, data, overview] = await Promise.all([
         prisma.cultivationBatch.count({ where: financialBatchWhere(filters) }),
         getFinancialRows(filters, filters.skip, filters.limit),
@@ -188,18 +195,18 @@ router.get('/financial', ...reportHandler('REPORT_FINANCIAL_VIEW', async (req, r
 }));
 
 router.get('/overview', ...reportHandler('REPORT_OVERVIEW_VIEW', async (req, res) => {
-    const filters = getFilters(req.query);
+    const filters = getFilters(req.query, req.user);
     res.json({ data: await getOverview({ ...filters, includeAudit: req.user.role === 'admin' }) });
 }));
 
 router.get('/cultivation', ...reportHandler('REPORT_CULTIVATION_VIEW', async (req, res) => {
-    const filters = getFilters(req.query);
+    const filters = getFilters(req.query, req.user);
     const [totalItems, data] = await Promise.all([prisma.cultivationBatch.count({ where: batchWhere(filters) }), getCultivationRows(filters, filters.skip, filters.limit)]);
     res.json(pageResponse(data, totalItems, filters));
 }));
 
 router.get('/classifier', ...reportHandler('REPORT_CLASSIFIER_VIEW', async (req, res) => {
-    const filters = getFilters(req.query);
+    const filters = getFilters(req.query, req.user);
     const where = { createdAt: { gte: filters.from, lte: filters.to } };
     const [totalItems, data] = await Promise.all([prisma.classifierLookup.count({ where }), getClassifierRows(filters, filters.skip, filters.limit)]);
     res.json(pageResponse(data, totalItems, filters));
@@ -207,7 +214,7 @@ router.get('/classifier', ...reportHandler('REPORT_CLASSIFIER_VIEW', async (req,
 
 router.get('/audit', ...reportHandler('REPORT_AUDIT_VIEW', async (req, res) => {
     if (req.user.role !== 'admin') fail(403, 'Chỉ admin được xem nhật ký hệ thống', 'AUTH_FORBIDDEN');
-    const filters = getFilters(req.query);
+    const filters = getFilters(req.query, req.user);
     const where = { createdAt: { gte: filters.from, lte: filters.to } };
     const [totalItems, data] = await Promise.all([prisma.auditLog.count({ where }), getAuditRows(filters, filters.skip, filters.limit)]);
     res.json(pageResponse(data, totalItems, filters));
@@ -244,7 +251,7 @@ router.get('/:type/export', ...reportHandler('REPORT_EXPORT', async (req, res) =
     const { type } = req.params;
     if (type === 'audit' && req.user.role !== 'admin') fail(403, 'Chỉ admin được xuất nhật ký hệ thống', 'AUTH_FORBIDDEN');
     const format = req.query.format === undefined ? '' : textField(req.query.format, 'format').toLowerCase();
-    const filters = getFilters(req.query);
+    const filters = getFilters(req.query, req.user);
     if (!allowedTypes.has(type) || !['csv', 'xlsx', 'pdf'].includes(format)) fail(400, 'Loại báo cáo hoặc định dạng xuất không hợp lệ');
     filters.includeAudit = req.user.role === 'admin';
 

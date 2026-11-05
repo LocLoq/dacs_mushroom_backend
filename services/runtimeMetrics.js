@@ -7,6 +7,7 @@ function start(name, database, queue) {
         const sample = { timestamp: Date.now(), pool_limit: database.limit,
             pool_active: pool?.activeConnections(), pool_idle: pool?.idleConnections(),
             pool_waiting: pool?.taskQueueSize(), event_loop_p95_ms: delay.percentile(95) / 1e6 };
+        if (name === 'api') sample.cache = { enabled: require('./publicCache').publicCache().enabled, ...require('./publicCache').publicCache().metrics };
         delay.reset();
         if (queue?.client?.status === 'ready') {
             try { sample.queue = await queue.getJobCounts(); sample.admitted = await queue.client.zcard('mushroomClassifier:admission'); } catch (_) {}

@@ -11,47 +11,72 @@ if (!__ENV.SESSIONS_PATH || !__ENV.BENCHMARK_IMAGE || !__ENV.BASE_URL) throw Err
 const users = new SharedArray('benchmark users', () => JSON.parse(open(__ENV.SESSIONS_PATH)).users);
 const meta = new SharedArray('benchmark metadata', () => {
   const m = JSON.parse(open(__ENV.SESSIONS_PATH));
-  return [{ counts: m.counts, batch: m.batches[0], mushroomId: m.mushroomId, publicImage: m.publicImage, baseUrl: m.baseUrl, authenticatedAt: m.authenticatedAt, imageMime: m.imageMime, runId: m.runId }];
+  return [{ counts: m.counts, facilities: m.facilities, batches: m.batches, species: m.species, searchTerms: m.searchTerms, verification: m.verification, foreignFixtures: m.foreignFixtures || [], batch: m.batches[0], mushroomId: m.mushroomId, publicImage: m.publicImage, baseUrl: m.baseUrl, authenticatedAt: m.authenticatedAt, imageMime: m.imageMime, runId: m.runId }];
 });
 const layout = new SharedArray('virtual user assignments', () => {
   const m = JSON.parse(open(__ENV.SESSIONS_PATH));
   const groups = Object.fromEntries(['admin', 'manager', 'staff'].map(role => [role, m.users.filter(u => u.role === role)]));
   const slots = [];
   if (m.counts.guest === 6) return [...m.users.map(u => ({ role: u.role, userId: u.id })), ...Array.from({ length: 6 }, () => ({ role: 'guest' }))];
-  for (let n = 0; n < 10; n++) {
-    slots.push({ role: 'admin', userId: groups.admin[n].id });
-    for (const u of groups.manager.slice(n * 5, n * 5 + 5)) slots.push({ role: 'manager', userId: u.id });
-    for (const u of groups.staff.slice(n * 50, n * 50 + 50)) slots.push({ role: 'staff', userId: u.id });
-    for (let i = 0; i < 944; i++) slots.push({ role: 'guest' });
+  for (let n = 0; n < m.facilities.length; n++) {
+    const facilityId = m.facilities[n];
+    if (groups.admin[n]) slots.push({ role: 'admin', userId: groups.admin[n].id, facilityId });
+    for (const u of groups.manager.filter(item => item.facilityId === facilityId)) slots.push({ role: 'manager', userId: u.id, facilityId });
+    for (const u of groups.staff.filter(item => item.facilityId === facilityId)) slots.push({ role: 'staff', userId: u.id, facilityId });
+    for (let i = n; i < m.counts.guest; i += m.facilities.length) slots.push({ role: 'guest', facilityId });
   }
-  return slots;
+  const pools = {};
+  for (const [role, offset] of [['admin', 0], ['manager', 1], ['staff', 2], ['guest', 3]]) {
+    const groupsByFacility = m.facilities.map((_, i) => slots.filter(slot => slot.role === role && slot.facilityId === m.facilities[(i + offset) % m.facilities.length]));
+    pools[role] = Array.from({ length: Math.max(0, ...groupsByFacility.map(group => group.length)) }, (_, n) => groupsByFacility.map(group => group[n]).filter(Boolean)).flat();
+  }
+  const used = { admin: 0, manager: 0, staff: 0, guest: 0 }, ordered = [];
+  const roles = Object.keys(used), forced = ['admin', 'manager', 'staff', 'guest', 'guest'];
+  for (let i = 0; i < slots.length; i++) {
+    const role = forced[i] || roles.filter(r => used[r] < pools[r].length).sort((a, b) =>
+      (pools[b].length * (i + 1) / slots.length - used[b]) - (pools[a].length * (i + 1) / slots.length - used[a]))[0];
+    ordered.push(pools[role][used[role]++]);
+  }
+  return ordered;
 });
 const photo = await openFile(__ENV.BENCHMARK_IMAGE);
 const base = __ENV.BASE_URL.replace(/\/$/, '');
 if (base !== meta[0].baseUrl) throw Error('BASE_URL must match authenticated session origin');
 const smoke = meta[0].counts.guest === 6;
 const layoutOnly = __ENV.BENCHMARK_PHASE === 'layout';
-const preflight = __ENV.BENCHMARK_PHASE === 'preflight';
+const securityOnly = __ENV.BENCHMARK_PHASE === 'security';
+const preflight = __ENV.BENCHMARK_PHASE === 'preflight' || securityOnly;
 const warmup = __ENV.BENCHMARK_PHASE === 'warmup';
 const calibration = __ENV.BENCHMARK_PHASE === 'measured' && __ENV.BENCHMARK_CALIBRATION_VUS === '100';
+const stepVus = Number(__ENV.BENCHMARK_STEP_VUS || 0);
+if (stepVus && ![5, 10, 25, 50, 100].includes(stepVus)) throw Error('Invalid step VU count');
 const stages = smoke || warmup ? [{ duration: '5s', target: 10 }, { duration: '30s', target: 10 }, { duration: '5s', target: 0 }]
+  : stepVus ? [{ duration: '10s', target: stepVus }, { duration: '2m', target: stepVus }, { duration: '10s', target: 0 }]
   : calibration ? [{ duration: '10s', target: 100 }, { duration: '3m', target: 100 }, { duration: '10s', target: 0 }]
-  : [{ duration: '2m', target: 1000 }, { duration: '2m', target: 3000 }, { duration: '2m', target: 5000 }, { duration: '2m', target: 10000 }, { duration: '30m', target: 10000 }, { duration: '2m', target: 0 }];
+  : [{ duration: '1m', target: 200 }, { duration: '1m', target: 500 }, { duration: '1m', target: 1000 }, { duration: '1m', target: 2000 }, { duration: '5m', target: 2000 }, { duration: '1m', target: 0 }];
 export const options = {
-  tags: { benchmark_run: meta[0].runId, test_phase: __ENV.BENCHMARK_PHASE || 'measured' },
+  tags: { benchmark_run: __ENV.BENCHMARK_CASE_ID || meta[0].runId, test_phase: __ENV.BENCHMARK_PHASE || 'measured' },
   scenarios: layoutOnly ? { layout: { executor: 'per-vu-iterations', vus: 1, iterations: 1, maxDuration: '30s' } }
     : preflight ? { preflight: { executor: 'per-vu-iterations', vus: 4, iterations: 1, maxDuration: '20m' } }
     : { mixed: { executor: 'ramping-vus', startVUs: 0, stages, gracefulRampDown: '15m', gracefulStop: '15m' } },
   systemTags: ['status', 'method', 'name', 'scenario', 'expected_response', 'error_code'],
   summaryTrendStats: ['avg', 'med', 'p(95)', 'p(99)', 'max'],
-  thresholds: preflight ? { 'checks{phase:business}': ['rate==1'], classifier_success: ['rate==1'] } : warmup || layoutOnly ? {} : { 'http_req_duration{phase:business,kind:read}': ['p(95)<500', 'p(99)<1000'],
+  thresholds: securityOnly ? { isolation_checks: ['rate==1'] } : preflight ? { 'checks{phase:business}': ['rate==1'], classifier_success: ['rate==1'] } : warmup || layoutOnly ? {} : { 'http_req_duration{phase:business,kind:read}': ['p(95)<500', 'p(99)<1000'],
     'http_req_failed{phase:business}': ['rate<0.01'], 'checks{phase:business}': ['rate>=0.99'], business_requests: ['count>0'] }
 };
 // Explicit submetrics keep the end-of-test summary useful without writing one
 // JSON sample per request. IDs and URLs never appear in metric tags.
-if (!warmup && !layoutOnly) {
+if (!warmup && !layoutOnly && !securityOnly) {
+  if (!smoke) options.thresholds.isolation_checks = ['rate==1'];
+  if (!preflight) {
+    for (const outcome of ['hit', 'miss', 'bypass', 'error']) options.thresholds[`cache_responses{outcome:${outcome}}`] = ['count>=0'];
+    for (let slot = 0; slot < meta[0].facilities.length; slot++) options.thresholds[`business_requests{facility_slot:${slot}}`] = ['count>=0'];
+  }
   if (!preflight) for (const stage of ['ramp_1', 'ramp_2', 'ramp_3', 'ramp_4', 'hold', 'ramp_down', 'drain']) {
     options.thresholds[`http_req_duration{kind:read,phase:business,stage:${stage}}`] = ['p(95)>=0'];
+    options.thresholds[`http_req_failed{phase:business,stage:${stage}}`] = ['rate>=0'];
+    options.thresholds[`checks{phase:business,stage:${stage}}`] = ['rate>=0'];
+    options.thresholds[`business_requests{stage:${stage}}`] = ['count>=0'];
   }
   const shared = ['species_list', 'species_detail', 'species_images', 'public_image', 'public_progress'];
   const internal = ['me', 'facilities', 'batches', 'batch_detail', 'batch_by_code', 'care_logs', 'growth', 'harvests', 'tasks', 'notifications', 'task_detail', 'evidence_candidates', 'care_image', 'workflow_refresh'];
@@ -93,7 +118,16 @@ const totalTime = new Trend('classifier_total_ms');
 const modelTime = new Trend('classifier_model_ms');
 const preprocessTime = new Trend('classifier_preprocess_ms');
 const socketEvents = new Counter('socket_events');
+const isolationChecks = new Rate('isolation_checks');
+const cacheResults = new Counter('cache_responses');
+const inputCoverage = new Counter('input_coverage');
 const pause = ms => new Promise(resolve => schedule(resolve, ms));
+let randomState = 0;
+function randomNumber() {
+  if (!randomState) randomState = ((Number(__ENV.BENCHMARK_RANDOM_SEED || 1234567) ^ execution.vu.idInTest) >>> 0) || 1;
+  randomState ^= randomState << 13; randomState ^= randomState >>> 17; randomState ^= randomState << 5;
+  return (randomState >>> 0) / 4294967296;
+}
 
 export function setup() {
   // k6 re-evaluates the init context for handleSummary after the run; checking
@@ -111,6 +145,12 @@ export function setup() {
   }
   for (const role of Object.keys(counts)) if (counts[role] !== expected[role]) throw Error(`Invalid ${role} VU count`);
   if (identities.size !== users.length || users.some(user => !identities.has(user.id))) throw Error('VU identities do not match sessions');
+  if (!smoke) for (const facilityId of meta[0].facilities) {
+    const group = layout.filter(slot => slot.facilityId === facilityId);
+    if (group.filter(slot => slot.role === 'manager').length !== 2 || group.filter(slot => slot.role === 'staff').length !== 18) throw Error('Facility identity distribution is invalid');
+    const guests = group.filter(slot => slot.role === 'guest').length;
+    if (guests < 179 || guests > 180) throw Error('Guest facility distribution is invalid');
+  }
 }
 
 async function request(user, method, pathname, name, body, expected = 200, kind = 'read') {
@@ -119,10 +159,29 @@ async function request(user, method, pathname, name, body, expected = 200, kind 
   if (body && !multipart) headers['Content-Type'] = 'application/json';
   const payload = body && !multipart ? JSON.stringify(body) : body;
   const elapsed = (Date.now() - execution.scenario.startTime) / 1000;
-  const bounds = smoke || warmup ? [5, 10, 15, 20, 35, 40] : [120, 240, 360, 480, 2280, 2400];
+  const bounds = smoke || warmup ? [5, 10, 15, 20, 35, 40] : stepVus ? [10, 130, 140, 140, 140, 140] : [60, 120, 180, 240, 540, 600];
   const stage = ['ramp_1', 'ramp_2', 'ramp_3', 'ramp_4', 'hold', 'ramp_down', 'drain'][bounds.findIndex(n => elapsed < n) < 0 ? 6 : bounds.findIndex(n => elapsed < n)];
-  const tags = { phase: 'business', role: user.role, endpoint: name, name, kind, method, stage };
+  const facilitySlot = Math.max(0, meta[0].facilities.indexOf(user.facilityId));
+  const tags = { phase: 'business', role: user.role, endpoint: name, name, kind, method, stage, facility_slot: String(facilitySlot) };
+  // Slots are positions in the public seed catalog, never database IDs or search strings.
+  if (['species_detail', 'species_images'].includes(name)) {
+    const match = pathname.match(/mushroom-species\/(\d+)/);
+    const slot = (meta[0].species || []).findIndex(item => item.id === Number(match?.[1]));
+    if (slot >= 0) inputCoverage.add(1, { dimension: 'species', slot: String(slot) });
+  } else if (name === 'public_progress') {
+    const match = pathname.match(/cultivation-batches\/([^/]+)/);
+    const code = match ? decodeURIComponent(match[1]) : '';
+    const slot = meta[0].batches.findIndex(item => item.code === code);
+    if (slot >= 0) inputCoverage.add(1, { dimension: 'batch', slot: String(slot) });
+  } else if (name === 'species_list') {
+    const page = pathname.match(/[?&]page=(\d+)/); if (page) inputCoverage.add(1, { dimension: 'page', slot: page[1] });
+    const search = pathname.match(/[?&]search=([^&]+)/);
+    const slot = search ? (meta[0].searchTerms || []).indexOf(decodeURIComponent(search[1])) : -1;
+    if (slot >= 0) inputCoverage.add(1, { dimension: 'search', slot: String(slot) });
+  }
   const res = await http.asyncRequest(method, `${base}${pathname}`, payload, { headers, tags, timeout: '30s' });
+  const cacheStatus = String(res.headers['X-Cache'] || '').toLowerCase();
+  if (['hit', 'miss', 'bypass', 'error'].includes(cacheStatus)) cacheResults.add(1, { outcome: cacheStatus, endpoint: name });
   requests.add(1, tags);
   let ok = res.status === expected;
   if (ok) {
@@ -138,9 +197,54 @@ async function request(user, method, pathname, name, body, expected = 200, kind 
       } catch (_) { ok = false; }
     }
   }
-  check(res, { 'expected status and response': () => ok }, { phase: 'business', role: user.role, endpoint: name });
+  check(res, { 'expected status and response': () => ok }, { phase: 'business', role: user.role, endpoint: name, stage });
+  if (ok && name === 'batches' && ['manager', 'staff'].includes(user.role)) {
+    const rows = res.json('data');
+    const isolated = Array.isArray(rows) && rows.every(row => Number(row.facilityId) === Number(user.facilityId));
+    isolationChecks.add(isolated, { probe: 'batch_list', role: user.role });
+    if (!isolated) execution.test.abort('Facility isolation failed for batch list');
+  }
   if (!ok) failures.add(1, { ...tags, reason: res.status === 429 ? 'rate_limit' : [401, 403].includes(res.status) ? 'auth' : res.status >= 500 ? 'server' : res.status === 0 ? 'network' : 'response' });
   return res;
+}
+
+async function isolationProbe(user, all = false) {
+  if (!['manager', 'staff'].includes(user.role)) return;
+  const other = meta[0].batches.find(row => row.facilityId !== user.facilityId);
+  if (!other) return;
+  const member = users.find(row => row.role === 'staff' && row.facilityId === other.facilityId) || meta[0].foreignFixtures.find(row => row.facilityId === other.facilityId);
+  const probes = [
+    ['batch', `/api/cultivation-batches/${other.id}`],
+    ['care', `/api/cultivation-batches/${other.id}/care-logs`],
+    ['finance', `/api/cultivation-batches/${other.id}/expenses`],
+    ['staff', `/api/production-facilities/${other.facilityId}/staff`],
+    ...(member?.taskId ? [['task', `/api/dashboard/tasks/${member.taskId}`]] : []),
+    ...(member?.careImage ? [['care_image', member.careImage]] : []),
+    ...(user.role === 'manager' ? [['report', `/api/reports/financial?facilityId=${other.facilityId}`]] : [])
+  ];
+  for (const [name, url] of all ? probes : [probes[Math.floor(randomNumber() * probes.length)]]) {
+    const response = await http.asyncRequest('GET', `${base}${url}`, null,
+      { headers: { Authorization: `Bearer ${user.token}` }, tags: { phase: 'security', role: user.role, endpoint: `cross_facility_${name}` }, timeout: '30s' });
+    const safe = response.status === 403 || response.status === 404;
+    check(response, { 'other facility data denied': () => safe }, { phase: 'security', role: user.role });
+    isolationChecks.add(safe, { probe: name, role: user.role });
+    if (!safe && response.status === 200) execution.test.abort(`Facility isolation failed: ${name}`);
+  }
+  if (user.role === 'manager' && meta[0].verification) {
+    const verification = meta[0].verification, expected = verification.facilities[String(user.facilityId)];
+    if (!expected) execution.test.abort('Missing facility verification data');
+    const url = `${base}/api/reports/financial?facilityId=${user.facilityId}&from=${encodeURIComponent(verification.from)}&to=${encodeURIComponent(verification.to)}`;
+    const response = await http.asyncRequest('GET', url, null, { headers: { Authorization: `Bearer ${user.token}` }, tags: { phase: 'security', role: user.role, endpoint: 'facility_report_totals' }, timeout: '30s' });
+    let body;
+    try { body = response.json(); } catch (_) { body = null; }
+    const ids = meta[0].batches.filter(row => row.facilityId === user.facilityId).map(row => row.id);
+    const safe = response.status === 200 && Array.isArray(body?.data) && body.data.length === expected.batches &&
+      body.data.every(row => ids.includes(row.batchId)) && Number(body.summary?.revenue) === Number(expected.revenue) &&
+      Number(body.summary?.totalCost) === Number(expected.totalCost) && Number(body.summary?.totalHarvestKg) === expected.totalHarvestKg;
+    check(response, { 'facility report matches seed totals': () => safe }, { phase: 'security', role: user.role });
+    isolationChecks.add(safe, { probe: 'report_totals', role: user.role });
+    if (!safe && response.status === 200) execution.test.abort('Facility report differs from seed totals');
+  }
 }
 
 // Engine.IO v4 + Socket.IO namespace handshake over the native k6 WebSocket.
@@ -201,7 +305,7 @@ async function classify(user) {
         const snapshot = await request(user, 'GET', `/api/mushroom-classifier/jobs/${jobId}`, 'classifier_job', undefined, 200, 'poll');
         if (snapshot.status === 200) {
           retryDelay = 5000;
-          nextPoll = Date.now() + (socket.connected ? 15000 : 5000) + Math.random() * 1000;
+          nextPoll = Date.now() + (socket.connected ? 15000 : 5000) + randomNumber() * 1000;
           const data = snapshot.json('data');
           if (['SUCCEEDED', 'FAILED'].includes(data.status)) {
             outcome = data.status.toLowerCase();
@@ -212,7 +316,7 @@ async function classify(user) {
             break;
           }
         } else {
-          nextPoll = Date.now() + retryDelay + Math.random() * 1000;
+          nextPoll = Date.now() + retryDelay + randomNumber() * 1000;
           retryDelay = Math.min(15000, retryDelay * 2);
         }
       }
@@ -225,10 +329,25 @@ async function classify(user) {
 }
 
 function reads(user) {
-  const batch = user.batchId || meta[0].batch.id, code = user.batchCode || meta[0].batch.code;
+  const m = meta[0], facilityIndex = Math.max(0, m.facilities.indexOf(user.facilityId));
+  const candidates = m.batches.filter(row => row.facilityId === user.facilityId);
+  const pick = list => {
+    if (__ENV.BENCHMARK_DISTRIBUTION !== 'hot' || list.length < 2) return list[Math.floor(randomNumber() * list.length)];
+    const hotCount = Math.min(list.length - 1, Math.max(1, Math.ceil(list.length * 0.2)));
+    return randomNumber() < 0.8 ? list[Math.floor(randomNumber() * hotCount)] : list[hotCount + Math.floor(randomNumber() * (list.length - hotCount))];
+  };
+  const chosenBatch = pick(candidates.length ? candidates : m.batches);
+  const pool = (m.species || [{ id: m.mushroomId, publicImage: m.publicImage }]).filter((_, i) => i % m.facilities.length === facilityIndex);
+  const species = pick(pool.length ? pool : m.species || [{ id: m.mushroomId, publicImage: m.publicImage }]);
+  const batch = user.batchId || chosenBatch.id, code = user.batchCode || chosenBatch.code;
+  const terms = m.searchTerms || [];
+  const selectedTerm = terms.length && randomNumber() < 0.6 ? pick(terms) : '';
+  const search = selectedTerm ? `&search=${encodeURIComponent(selectedTerm)}` : '';
+  const page = selectedTerm && !['Benchmark', 'Family'].includes(selectedTerm) ? 1 : 1 + Math.floor(randomNumber() * 4);
+  const limit = [10, 20, 50][Math.floor(randomNumber() * 3)];
   const common = [
-    ['species_list', '/api/mushroom-species'], ['species_detail', `/api/mushroom-species/${meta[0].mushroomId}`],
-    ['species_images', `/api/mushroom-species/${meta[0].mushroomId}/images`], ['public_image', meta[0].publicImage],
+    ['species_list', `/api/mushroom-species?page=${page}&limit=${limit}${search}`], ['species_detail', `/api/mushroom-species/${species.id}`],
+    ['species_images', `/api/mushroom-species/${species.id}/images`], ['public_image', species.publicImage],
     ['public_progress', `/api/public/cultivation-batches/${encodeURIComponent(code)}/growth-progress/current`]
   ];
   if (user.role === 'guest') return common;
@@ -270,7 +389,7 @@ async function speciesWorkflow(user, marker, gallery) {
 async function writeAction(user) {
   if (user.role === 'guest') return;
   const batch = user.batchId, marker = `bn_${meta[0].runId}_load`;
-  const selection = Math.random();
+  const selection = randomNumber();
   if (user.role === 'staff' && selection < 0.25) {
     const tasks = await request(user, 'GET', `/api/dashboard/tasks?status=TODO&batchId=${batch}`, 'task_open');
     if (tasks.status !== 200 || !tasks.json('data').length) return;
@@ -321,7 +440,7 @@ async function writeAction(user) {
     const roleId = roles.json('data').find(role => role.name === 'staff')?.id;
     if (!roleId) return;
     const username = `${marker}_${execution.vu.idInTest}_${execution.vu.iterationInInstance}`;
-    const created = await request(user, 'POST', '/api/admin/users', 'admin_user_create', { username, password: `${marker}_${Math.random()}`, full_name: marker, phone_number: '0000000000', email: 'bench@example.test', role_id: roleId }, 201, 'write');
+    const created = await request(user, 'POST', '/api/admin/users', 'admin_user_create', { username, password: `${marker}_${randomNumber()}`, full_name: marker, phone_number: '0000000000', email: 'bench@example.test', role_id: roleId }, 201, 'write');
     if (created.status === 201) await request(user, 'DELETE', `/api/admin/users/${created.json('data.id')}`, 'admin_user_delete', undefined, 200, 'write');
     return;
   }
@@ -334,7 +453,7 @@ async function writeAction(user) {
     ['expense_create', `/api/cultivation-batches/${batch}/expenses`, { name: marker, category: 'MATERIAL', quantity: 1, unit: 'kg', unitPrice: 1 }],
     ['facility_create', '/api/production-facilities', { name: marker, address: 'Benchmark', facilityType: 'HOUSEHOLD' }]
   ];
-  const [name, url, body] = choices[Math.floor(Math.random() * choices.length)];
+  const [name, url, body] = choices[Math.floor(randomNumber() * choices.length)];
   await request(user, 'POST', url, name, body, 201, 'write');
 }
 
@@ -367,6 +486,15 @@ async function preflightWrites(user) {
     await request(user, 'PUT', `/api/cultivation-batches/${batchId}`, 'batch_update', { status: 'INCUBATION' }, 200, 'write');
     await request(user, 'POST', `/api/cultivation-batches/${batchId}/staff`, 'batch_staff_grant', { userId: user.staffId }, 201, 'write');
     await request(user, 'DELETE', `/api/cultivation-batches/${batchId}/staff/${user.staffId}`, 'batch_staff_revoke', undefined, 200, 'write');
+    const revokedStaff = users.find(row => row.id === user.staffId);
+    if (revokedStaff) {
+      const revoked = await http.asyncRequest('GET', `${base}/api/cultivation-batches/${batchId}`, null,
+        { headers: { Authorization: `Bearer ${revokedStaff.token}` }, tags: { phase: 'security', role: 'staff', endpoint: 'revoked_batch' }, timeout: '30s' });
+      const denied = revoked.status === 403 || revoked.status === 404;
+      isolationChecks.add(denied, { role: 'staff', probe: 'revoked_batch' });
+      check(revoked, { 'revoked assignment denied': () => denied }, { phase: 'security', role: 'staff' });
+      if (!denied) execution.test.abort('Revoked batch assignment remains accessible');
+    }
     await request(user, 'DELETE', `/api/cultivation-batches/${batchId}`, 'batch_delete', undefined, 200, 'write');
   }
   await request(user, 'DELETE', `${path}/staff/${user.staffId}`, 'facility_staff_revoke', undefined, 200, 'write');
@@ -398,7 +526,7 @@ async function preflightWrites(user) {
     const roles = await request(user, 'GET', '/api/admin/roles', 'admin_roles');
     if (roles.status === 200) {
       const roleId = roles.json('data').find(role => role.name === 'staff').id;
-      const account = await request(user, 'POST', '/api/admin/users', 'admin_user_create', { username: `${marker}_${Date.now()}`, password: `${marker}_${Math.random()}`, full_name: marker, phone_number: '0000000000', email: 'bench@example.test', role_id: roleId }, 201, 'write');
+      const account = await request(user, 'POST', '/api/admin/users', 'admin_user_create', { username: `${marker}_${Date.now()}`, password: `${marker}_${randomNumber()}`, full_name: marker, phone_number: '0000000000', email: 'bench@example.test', role_id: roleId }, 201, 'write');
       if (account.status === 201) {
         await request(user, 'PUT', `/api/admin/users/${account.json('data.id')}`, 'admin_user_update', { full_name: `${marker}_updated` }, 200, 'write');
         await request(user, 'DELETE', `/api/admin/users/${account.json('data.id')}`, 'admin_user_delete', undefined, 200, 'write');
@@ -412,7 +540,7 @@ export default async function () {
   const slot = preflight ? [{ role: 'admin' }, { role: 'manager' }, { role: 'staff' }, { role: 'guest' }][execution.vu.idInTest - 1] : layout[execution.vu.idInTest - 1];
   if (!slot) throw Error('VU count exceeds configured identities');
   const identity = slot.role === 'guest' ? { role: 'guest' } : users.find(row => preflight ? row.role === slot.role : row.id === slot.userId);
-  const user = identity.assignments?.length ? { ...identity, ...identity.assignments[Math.floor(Math.random() * identity.assignments.length)] } : identity;
+  const user = identity.assignments?.length ? { ...identity, ...identity.assignments[Math.floor(randomNumber() * identity.assignments.length)] } : { ...identity, facilityId: identity.facilityId || slot.facilityId };
   const refreshPending = new Map();
   const workflow = user.token ? connectSocket(user, '/workflow', data => {
     const id = Number(data?.id);
@@ -424,26 +552,32 @@ export default async function () {
   }) : null;
   const end = Date.now() + Number(__ENV.SESSION_MS || 120000);
   try {
-    const endpoints = reads(user);
+    let endpoints = reads(user);
     if (preflight) {
+      if (securityOnly) { await isolationProbe(user, true); return; }
       for (const [name, url] of endpoints) await request(user, 'GET', url, name);
+      await isolationProbe(user, true);
       await preflightWrites(user);
       return;
     }
+    if (!warmup) await isolationProbe(user);
+    let actionNumber = 0;
     while (Date.now() < end) {
-      const selector = Math.random();
+      endpoints = reads(user);
+      const selector = randomNumber();
       if (selector < 0.05) { actions.add(1, { role: user.role, action: 'classify' }); await classify(user); }
       else if (selector < 0.15 && user.role !== 'guest') { actions.add(1, { role: user.role, action: 'write' }); await writeAction(user); }
       else {
         actions.add(1, { role: user.role, action: 'read' });
-        const [name, url] = endpoints[Math.floor(Math.random() * endpoints.length)];
+        const [name, url] = endpoints[Math.floor(randomNumber() * endpoints.length)];
         await request(user, 'GET', url, name);
       }
       for (const [resource, url] of refreshPending) {
         refreshPending.delete(resource);
         await request(user, 'GET', url, 'workflow_refresh');
       }
-      await pause(2000 + Math.random() * 3000);
+      if (++actionNumber % 20 === 0) await isolationProbe(user);
+      await pause(2000 + randomNumber() * 3000);
     }
   } finally { if (workflow) workflow.close(); }
 }

@@ -51,7 +51,7 @@ before(async () => {
     assert.match(database, /^dacs_feature_test_[a-f0-9]{16}$/);
     await connection.query(`CREATE DATABASE \`${database}\` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci`);
     await connection.query(`USE \`${database}\``);
-    for (const filename of ['test/fixtures/pre_workflow_schema.sql', 'sql/workflow_finance_gallery.sql', 'sql/gallery_visibility.sql', 'sql/classifier_resilience.sql', 'sql/account_password_batch_codes.sql', 'sql/staff_care_notifications.sql', 'sql/unifiedpush_apns.sql', 'sql/firebase_push.sql', 'sql/push_device_origin.sql', 'sql/facility_managers.sql']) {
+    for (const filename of ['test/fixtures/pre_workflow_schema.sql', 'sql/workflow_finance_gallery.sql', 'sql/gallery_visibility.sql', 'sql/classifier_resilience.sql', 'sql/account_password_batch_codes.sql', 'sql/staff_care_notifications.sql', 'sql/unifiedpush_apns.sql', 'sql/firebase_push.sql', 'sql/push_device_origin.sql', 'sql/facility_managers.sql', 'sql/cache_indexes.sql']) {
         if (filename === 'sql/account_password_batch_codes.sql') await connection.query("INSERT INTO cultivation_batches (batch_code,facility_id,mushroom_id,start_date,updated_at) VALUES ('LO-CS12-2026-099',1,1,NOW(3),NOW(3))");
         const statements = fs.readFileSync(path.join(__dirname, '..', filename), 'utf8').split(';').map((statement) => statement.trim()).filter(Boolean);
         for (const statement of statements) await connection.query(statement);
@@ -305,6 +305,35 @@ test('SQL upgrade matches Prisma schema and preserves existing records', { skip:
     const configUrl = `mysql://${encodeURIComponent(process.env.DATABASE_USER)}:${encodeURIComponent(process.env.DATABASE_PASSWORD || '')}@${process.env.DATABASE_HOST}:${process.env.DATABASE_PORT || 3306}/${database}`;
     const result = spawnSync(process.execPath, ['node_modules/prisma/build/index.js', 'migrate', 'diff', '--from-config-datasource', '--to-schema', 'prisma/schema.prisma', '--exit-code'], { encoding: 'utf8', env: { ...process.env, DATABASE_URL: configUrl, DATABASE_NAME: database } });
     assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
+});
+
+test('manager reports and exports exclude an unrelated facility', { skip: !enabled }, async () => {
+    const outside = await prisma.productionFacility.create({ data: { name: 'Private foreign facility', address: 'Other', facilityType: 'HOUSEHOLD' } });
+    const foreignBatch = await prisma.cultivationBatch.create({ data: { batchCode: `OTHER-${outside.id}`, facilityId: outside.id, mushroomId: species.id, startDate: new Date() } });
+    try {
+        const expense = await prisma.batchExpense.create({ data: { batchId: foreignBatch.id, name: 'Foreign', category: 'MATERIAL', quantity: 1, unit: 'kg', unitPrice: 10, amount: 10, incurredAt: new Date(), createdByUserId: admin.id } });
+        const root = `/cultivation-batches/${foreignBatch.id}`;
+        assert.equal((await request(`${root}/expenses`, manager)).status, 403);
+        assert.equal((await request(`${root}/financial-summary`, manager)).status, 403);
+        assert.equal((await request(`${root}/expenses`, manager, { name: 'x', category: 'MATERIAL', quantity: 1, unit: 'kg', unitPrice: 10 })).status, 403);
+        assert.equal((await request(`${root}/expenses/${expense.id}`, manager, { quantity: 2 }, 'PATCH')).status, 403);
+        assert.equal((await request(`${root}/expenses/${expense.id}`, manager, undefined, 'DELETE')).status, 403);
+        const forbidden = await request(`/reports/financial?facilityId=${outside.id}`, manager);
+        assert.equal(forbidden.status, 403);
+        const visible = await request('/reports/financial', manager);
+        assert.equal(visible.status, 200);
+        assert.ok(!visible.body.data.some(row => row.batchId === foreignBatch.id));
+        const exported = await request('/reports/financial/export?format=csv', manager);
+        assert.equal(exported.status, 200);
+        assert.doesNotMatch(exported.body.toString('utf8'), /Private foreign facility/);
+        const adminView = await request(`/reports/financial?facilityId=${outside.id}`, admin);
+        assert.equal(adminView.status, 200);
+        assert.ok(adminView.body.data.some(row => row.batchId === foreignBatch.id));
+    } finally {
+        await prisma.batchExpense.deleteMany({ where: { batchId: foreignBatch.id } });
+        await prisma.cultivationBatch.delete({ where: { id: foreignBatch.id } });
+        await prisma.productionFacility.delete({ where: { id: outside.id } });
+    }
 });
 
 test('QR batch lookup resolves exact codes for staff and refuses guests', { skip: !enabled }, async () => {

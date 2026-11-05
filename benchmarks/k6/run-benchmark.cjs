@@ -15,10 +15,14 @@ const image = path.resolve(process.env.BENCHMARK_IMAGE || '');
 const k6 = process.env.K6_PATH || 'k6';
 const output = path.resolve(process.env.RESULTS_DIR || '');
 const mode = process.env.BENCHMARK_MODE || 'realistic';
+const cacheCase = process.env.BENCHMARK_CACHE_CASE || 'cold';
+if (!['off', 'cold', 'warm'].includes(cacheCase)) throw Error('Invalid BENCHMARK_CACHE_CASE');
 if (!base || !process.env.SESSIONS_PATH || !process.env.BENCHMARK_IMAGE || !process.env.RESULTS_DIR) throw Error('Set BASE_URL, SESSIONS_PATH, BENCHMARK_IMAGE and RESULTS_DIR');
 if (!['realistic', 'capacity'].includes(mode)) throw Error('BENCHMARK_MODE must be realistic or capacity');
 if (mode === 'capacity' && process.env.BENCHMARK_CAPACITY_CONFIRMED !== '1') throw Error('Capacity mode requires BENCHMARK_CAPACITY_CONFIRMED=1');
 const sessions = JSON.parse(fs.readFileSync(sessionsPath, 'utf8'));
+const measurementId = process.env.BENCHMARK_CASE_ID || sessions.runId;
+if (!/^[a-z0-9_-]{4,80}$/.test(measurementId)) throw Error('Invalid BENCHMARK_CASE_ID');
 const { smoke } = validateSessions(sessions, base);
 const declaredRateLimits = validateRateLimits(process.env, { smoke, mode });
 const imageHash = crypto.createHash('sha256').update(fs.readFileSync(image)).digest('hex');
@@ -37,8 +41,9 @@ const python = process.env.BENCHMARK_PYTHON || 'python';
 const prometheus = (process.env.BENCHMARK_PROMETHEUS_URL || 'http://127.0.0.1:9090').replace(/\/$/, '');
 const grafana = (process.env.BENCHMARK_GRAFANA_URL || 'http://127.0.0.1:3000').replace(/\/$/, '');
 if (!smoke && new URL(process.env.K6_PROMETHEUS_RW_SERVER_URL).origin !== new URL(prometheus).origin) throw Error('Prometheus query and remote-write URLs must have the same origin');
-const metadata = { schema_version: 2, started_at: new Date().toISOString(), base_url: base, mode, run_id: sessions.runId,
-  profile: smoke ? 'smoke' : process.env.BENCHMARK_CALIBRATION_VUS === '100' ? 'calibration-100-vu' : 'full', roles: sessions.counts, source_ips: process.env.BENCHMARK_SOURCE_IPS || 'operating-system default',
+const metadata = { schema_version: 2, started_at: new Date().toISOString(), base_url: base, mode, run_id: sessions.runId, measurement_id: measurementId,
+  profile: smoke ? 'smoke' : process.env.BENCHMARK_STEP_VUS ? 'steps-2000' : process.env.BENCHMARK_CALIBRATION_VUS === '100' ? 'calibration-100-vu' : 'full', roles: sessions.counts, source_ips: process.env.BENCHMARK_SOURCE_IPS || 'operating-system default',
+  cache_case: cacheCase, distribution: process.env.BENCHMARK_DISTRIBUTION || 'uniform', step_vus: Number(process.env.BENCHMARK_STEP_VUS || 0), random_seed: Number(process.env.BENCHMARK_RANDOM_SEED || 1234567),
   source_ip_count_declared: sourceCount,
   rate_limits_declared: declaredRateLimits,
   generator: { platform: process.platform, node: process.version, k6: execFileSync(k6, ['version'], { encoding: 'utf8' }).trim(),
@@ -114,6 +119,9 @@ async function startSampler() {
   try { effective = JSON.parse(api[0].versions.runtime.stdout); } catch (_) { throw Error('Cannot verify API runtime mode'); }
   if (effective.mode !== (mode === 'capacity' ? 'benchmark' : 'production')) throw Error('Server image mode does not match benchmark mode');
   metadata.effective_api = effective;
+  const cacheEnabled = api[0].config.CACHE_ENABLED === 'true';
+  if (cacheEnabled !== (cacheCase !== 'off')) throw Error('Running API cache mode does not match BENCHMARK_CACHE_CASE');
+  metadata.cache_effective = { enabled: cacheEnabled, namespace: api[0].config.CACHE_NAMESPACE || 'mushroom:public:v1' };
   metadata.rate_limits_effective = mode === 'capacity' ? { enabled: false, api: null, classifier: null, window_ms: null } : {
     enabled: true, api: Number(api[0].config.API_RATE_LIMIT_MAX || 300), classifier: Number(api[0].config.CLASSIFIER_RATE_LIMIT_MAX || 10),
     window_ms: Number(api[0].config.RATE_LIMIT_WINDOW_MS || 60000) };
@@ -154,7 +162,7 @@ async function run(phase) {
   const env = { ...process.env, BASE_URL: base, SESSIONS_PATH: sessionsPath, BENCHMARK_IMAGE: image,
     BENCHMARK_PHASE: phase, SUMMARY_PATH: path.join(output, `${phase}.summary.json`), K6_NO_COLOR: 'true', K6_NO_USAGE_REPORT: 'true',
     K6_PROMETHEUS_RW_TREND_STATS: 'avg,med,p(95),p(99)' };
-  if (phase === 'warmup' || smoke) env.SESSION_MS = '20000';
+  if (phase === 'warmup' || smoke || process.env.BENCHMARK_STEP_VUS) env.SESSION_MS = '20000';
   delete env.SSH_PASSWORD; delete env.SSH_PRIVATE_KEY; delete env.SSH_PASSPHRASE; delete env.SSH_AUTH_SOCK; delete env.BENCHMARK_PASSWORD;
   const args = ['run', '--quiet', '--new-machine-readable-summary=false'];
   if (process.env.BENCHMARK_SOURCE_IPS) args.push('--local-ips', process.env.BENCHMARK_SOURCE_IPS);
@@ -172,6 +180,41 @@ async function run(phase) {
   if (safetyStop) throw Error(safetyStop);
   if (record.exit_code !== 0 && (phase !== 'measured' || record.exit_code !== 99)) throw Error(`${phase} failed; inspect ${phase}.log`);
   console.log(`Finished ${phase}: exit ${record.exit_code}`);
+}
+async function sshCommand(command) {
+  return new Promise((resolve, reject) => ssh.exec(command, (error, stream) => {
+    if (error) return reject(error);
+    let output = '', stderr = '';
+    stream.on('data', chunk => output += chunk); stream.stderr.on('data', chunk => stderr += chunk);
+    stream.on('close', code => code === 0 ? resolve(output.trim()) : reject(Error(`Cache preparation failed: ${stderr}`)));
+  }));
+}
+async function prepareCache() {
+  if (cacheCase === 'off') { metadata.cache_preparation = { mode: 'off' }; save(); return; }
+  if (!ssh) throw Error('Cache preparation requires SSH');
+  const namespace = metadata.cache_effective.namespace, project = process.env.BENCHMARK_COMPOSE_PROJECT;
+  if (!/^[a-zA-Z0-9:_-]+$/.test(namespace) || !/^[a-zA-Z0-9_-]+$/.test(project || '')) throw Error('Unsafe cache namespace or project');
+  for (const group of ['species', 'gallery', 'progress']) {
+    const result = await sshCommand(`docker exec ${project}-redis-cache-1 redis-cli SET ${namespace}:epoch:${group} ${crypto.randomUUID()}`);
+    if (result !== 'OK') throw Error('Unable to rotate cache namespace');
+  }
+  metadata.cache_preparation = { mode: cacheCase, reset_at: new Date().toISOString() };
+  if (cacheCase === 'warm') {
+    const speciesPaths = (sessions.species || []).flatMap(s => [`/api/mushroom-species/${s.id}`, `/api/mushroom-species/${s.id}/images`]);
+    const searchPaths = ['', ...(sessions.searchTerms || [])].flatMap(term => (term && !['Benchmark', 'Family'].includes(term) ? [1] : [1, 2, 3, 4]).flatMap(page => [10, 20, 50].map(limit => `/api/mushroom-species?page=${page}&limit=${limit}${term ? `&search=${encodeURIComponent(term)}` : ''}`)));
+    const progressPaths = sessions.batches.map(b => `/api/public/cultivation-batches/${encodeURIComponent(b.code)}/growth-progress/current`);
+    const paths = [...speciesPaths, ...searchPaths, ...progressPaths];
+    let cursor = 0, failures = 0;
+    await Promise.all(Array.from({ length: 4 }, async () => { while (cursor < paths.length) {
+      const p = paths[cursor++]; try { const response = await fetch(base + p, { signal: AbortSignal.timeout(30000) }); await response.arrayBuffer(); if (!response.ok) failures++; } catch (_) { failures++; }
+    } }));
+    if (failures) throw Error(`Cache warmup failed for ${failures} requests`);
+    let hits = 0; const sample = [...speciesPaths.slice(0, 2), ...searchPaths.slice(-4), ...progressPaths.slice(0, 4)];
+    for (const p of sample) { const response = await fetch(base + p, { signal: AbortSignal.timeout(30000) }); await response.arrayBuffer(); if (response.ok && response.headers.get('x-cache') === 'HIT') hits++; }
+    metadata.cache_preparation = { ...metadata.cache_preparation, paths: paths.length, verification_requests: sample.length, hits, completed_at: new Date().toISOString() };
+    if (!sample.length || hits !== sample.length) throw Error('Cache warmup verification failed');
+  }
+  save();
 }
 async function main() {
   metadata.monitoring = await monitoring(prometheus, grafana); save();
@@ -197,13 +240,15 @@ async function main() {
     }
     if (!metadata.server.cpu_count || !metadata.server.memory?.MemTotal || !metadata.server.docker_version?.Version) throw Error('Missing server CPU, RAM or Docker version');
     const found = new Set(metadata.server.containers.map(item => item.service));
-    for (const name of ['api', 'db', 'redis', 'classifier', 'classifier-worker']) if (!found.has(name)) throw Error(`Missing required service metadata: ${name}`);
-    for (const container of metadata.server.containers.filter(item => ['api', 'db', 'redis', 'classifier', 'classifier-worker'].includes(item.service))) {
+    for (const name of ['api', 'db', 'redis', 'redis-cache', 'classifier', 'classifier-worker']) if (!found.has(name)) throw Error(`Missing required service metadata: ${name}`);
+    for (const container of metadata.server.containers.filter(item => ['api', 'db', 'redis', 'redis-cache', 'classifier', 'classifier-worker'].includes(item.service))) {
       for (const [name, version] of Object.entries(container.versions)) if (version.exit_code !== 0 || !version.stdout) throw Error(`Missing version metadata: ${container.service}/${name}`);
     }
   }
   await run('preflight');
   await run('warmup');
+  await prepareCache();
+  await run('security');
   await run('measured');
   if (metadata.sampler === 'ssh' && stopped) throw Error('Resource sampler stopped before measurements finished');
   if (ssh && remoteArgs) metadata.server_after = JSON.parse(await remote(`exec python3 -u - --metadata ${remoteArgs}`));
@@ -222,10 +267,11 @@ async function finish(error) {
   const measured = metadata.runs.find(row => row.id === 'measured');
   if (measured?.finished_at && metadata.monitoring?.prometheus?.status === 'ok') {
     const start = Date.parse(measured.started_at) / 1000, end = Date.parse(measured.finished_at) / 1000;
-    const selector = `benchmark_run="${sessions.runId}",test_phase="measured"`;
+    const selector = `benchmark_run="${measurementId}",test_phase="measured"`;
     const queries = { vus: `k6_vus{${selector}}`, rps: `sum(rate(k6_business_requests_total{${selector}}[1m]))`,
       failures: `sum(rate(k6_business_failures_total{${selector}}[1m]))`, latency_p95: `max(k6_http_req_duration_p95{${selector},phase="business"})`,
-      classifier: `sum by (outcome) (rate(k6_classifier_jobs_total{${selector}}[1m]))` };
+      classifier: `sum by (outcome) (rate(k6_classifier_jobs_total{${selector}}[1m]))`,
+      input_coverage: `sum by (dimension,slot) (k6_input_coverage_total{${selector}})` };
     const series = Object.fromEntries(await Promise.all(Object.entries(queries).map(async ([name, query]) => {
       try { return [name, await queryRange(prometheus, query, start, end)]; }
       catch (failure) { return [name, { error: failure.message }]; }

@@ -4,7 +4,7 @@ const { validateRateLimits, validateSessions } = require('../benchmarks/k6/valid
 
 const now = Date.now();
 function fixture(smoke = false) {
-  const counts = smoke ? { admin: 1, manager: 1, staff: 2, guest: 6 } : { admin: 10, manager: 50, staff: 500, guest: 9440 };
+  const counts = smoke ? { admin: 1, manager: 1, staff: 2, guest: 6 } : { admin: 5, manager: 20, staff: 180, guest: 1795 };
   const users = [];
   for (const role of ['admin', 'manager', 'staff']) for (let index = 0; index < counts[role]; index++) {
     const id = users.length + 1, username = `bench_${id}`;
@@ -13,15 +13,19 @@ function fixture(smoke = false) {
   }
   const staff = users.filter(user => user.role === 'staff');
   const managers = users.filter(user => user.role === 'manager');
+  if (!smoke) {
+    staff.forEach((user, index) => { user.facilityId = Math.floor(index / 18) + 1; });
+    managers.forEach((user, index) => { user.facilityId = Math.floor(index / 2) + 1; });
+  }
   const pair = user => ({ staffId: user.id, facilityId: user.facilityId, batchId: user.batchId, batchCode: user.batchCode });
-  managers.forEach((manager, index) => { manager.assignments = staff.slice(index * (counts.staff / counts.manager), (index + 1) * (counts.staff / counts.manager)).map(pair); });
+  managers.forEach(manager => { manager.assignments = staff.filter(user => user.facilityId === manager.facilityId).map(pair); });
   users.filter(user => user.role === 'admin').forEach(user => { user.assignments = [pair(staff[0])]; });
   return { complete: true, baseUrl: 'http://127.0.0.1:8080', authenticatedAt: new Date(now).toISOString(), counts, users,
-    facilities: Array(smoke ? 1 : 50).fill(1), batches: Array(smoke ? 2 : 250).fill({ id: 1 }) };
+    facilities: Array.from({ length: smoke ? 2 : 10 }, (_, index) => index + 1), batches: Array(smoke ? 3 : 50).fill({ id: 1 }) };
 }
 
 test('benchmark validates both full and smoke identity populations', () => {
-  assert.equal(validateSessions(fixture(), 'http://127.0.0.1:8080', now).expected.guest, 9440);
+  assert.equal(validateSessions(fixture(), 'http://127.0.0.1:8080', now).expected.guest, 1795);
   assert.equal(validateSessions(fixture(true), 'http://127.0.0.1:8080', now).smoke, true);
 });
 
