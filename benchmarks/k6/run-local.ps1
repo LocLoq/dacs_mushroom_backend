@@ -5,10 +5,11 @@ param(
     [string]$K6 = '.cache/k6/k6-v2.3.0-windows-amd64/k6.exe',
     [string]$Python = 'C:/Users/loql/AppData/Local/Python/pythoncore-3.12-64/python.exe',
     [switch]$Smoke,
-    [ValidateSet('All', 'Small', 'Main')][string]$Suite = 'All'
+    [ValidateSet('All', 'Small', 'Main', 'MainCold', 'MainWarm')][string]$Suite = 'All'
 )
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'smoke-readiness.ps1')
+. (Join-Path $PSScriptRoot 'isolation-policy.ps1')
 $repo = (Resolve-Path (Join-Path $PSScriptRoot '../..')).Path
 Set-Location -LiteralPath $repo
 if ($Server -notmatch '^[A-Za-z0-9.-]+$' -or $SshUser -notmatch '^[a-z_][a-z0-9_-]*$') { throw 'Invalid SSH host or user' }
@@ -39,7 +40,8 @@ function Run([string]$exe, [string[]]$commandArgs) {
 function Remote([string]$command) { Run 'ssh' @('-o','BatchMode=yes','-o','StrictHostKeyChecking=yes','-o','ConnectTimeout=8',$target,$command) }
 function Stack([string]$action, [string[]]$arguments = @()) {
     $suffix = if ($arguments.Count) { ' ' + ($arguments -join ' ') } else { '' }
-    Remote "cd $remoteDir && sh benchmarks/k6/remote-stack.sh $action $taskRun$suffix"
+    try { Remote "cd $remoteDir && sh benchmarks/k6/remote-stack.sh $action $taskRun$suffix" }
+    catch { throw "Remote benchmark action '$action' failed for project $taskRun. See SSH output above. $_" }
 }
 if (-not (Test-Path (Join-Path $toolDir 'node_modules/ssh2/package.json'))) {
     Run 'npm' @('install','--prefix',$toolDir,'ssh2@1.17.0','--no-save')
@@ -104,6 +106,8 @@ $env:K6_PROMETHEUS_RW_SERVER_URL = 'http://127.0.0.1:9090/api/v1/write'
         if ($Suite -in @('All', 'Main')) { foreach ($cache in @('cold','warm')) {
             $cases += [PSCustomObject]@{ distribution='hot'; cache=$cache; vus=0; name="main-hot-$cache" }
         } }
+        if ($Suite -eq 'MainCold') { $cases += [PSCustomObject]@{ distribution='hot'; cache='cold'; vus=0; name='main-hot-cold' } }
+        if ($Suite -eq 'MainWarm') { $cases += [PSCustomObject]@{ distribution='hot'; cache='warm'; vus=0; name='main-hot-warm' } }
     }
     foreach ($case in $cases) {
         Stack 'configure' @(2,1,10,$(if ($case.cache -eq 'off') { 'false' } else { 'true' }))
@@ -121,7 +125,7 @@ $env:K6_PROMETHEUS_RW_SERVER_URL = 'http://127.0.0.1:9090/api/v1/write'
         $analysisFile = Join-Path $env:RESULTS_DIR 'analysis.json'
         if (Test-Path -LiteralPath $analysisFile) {
             $analysis = Get-Content -Raw -Encoding UTF8 -LiteralPath $analysisFile | ConvertFrom-Json
-            if ($analysis.isolation_checks.fails -gt 0) { throw "Facility isolation failed; inspect $analysisFile" }
+            Assert-IsolationOutcome $analysis $analysisFile
         }
         if ($Smoke) {
             $readiness = Get-Content -Raw -Encoding UTF8 -LiteralPath (Join-Path $env:RESULTS_DIR 'readiness.json') | ConvertFrom-Json
@@ -134,8 +138,8 @@ $env:K6_PROMETHEUS_RW_SERVER_URL = 'http://127.0.0.1:9090/api/v1/write'
     }
     Write-Host "Finished $taskRun; results: $resultsRoot"
 } finally {
-    if ($Smoke -and -not $completedSmoke) {
-        try { Stack 'stop' } catch { Write-Warning "Could not stop failed smoke project $taskRun; data was retained." }
+    if (-not $Smoke -or -not $completedSmoke) {
+        try { Stack 'stop' } catch { Write-Warning "Could not stop benchmark project $taskRun; data was retained." }
     }
     if (-not $Smoke -and (Test-Path -LiteralPath $resultsRoot)) { & node benchmarks/k6/suite-summary.cjs $resultsRoot }
     Remove-Item Env:BENCHMARK_PASSWORD -ErrorAction SilentlyContinue

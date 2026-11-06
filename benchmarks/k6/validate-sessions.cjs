@@ -27,7 +27,7 @@ function validateSessions(data, baseUrl, now = Date.now()) {
   const smoke = data.counts?.guest === 6;
   if (!smoke && data.historyScale !== undefined && data.historyScale !== 1 && process.env.BENCHMARK_ALLOW_REDUCED_SEED !== '1') throw Error('Full benchmark requires the complete history dataset');
   const expected = smoke ? { admin: 1, manager: 1, staff: 2, guest: 6, facilities: 2, batches: 3 }
-    : { admin: 5, manager: 20, staff: 180, guest: 1795, facilities: 10, batches: 50 };
+    : { admin: 5, manager: 20, staff: 80, guest: 895, facilities: 10, batches: 50 };
   for (const role of ['admin', 'manager', 'staff', 'guest']) if (data.counts?.[role] !== expected[role]) throw Error(`Unexpected ${role} count`);
   if (!Array.isArray(data.facilities) || data.facilities.length !== expected.facilities || !Array.isArray(data.batches) || data.batches.length !== expected.batches) throw Error('Unexpected benchmark dataset size');
   if (data.users.length !== expected.admin + expected.manager + expected.staff) throw Error('Unexpected internal account count');

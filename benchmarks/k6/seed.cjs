@@ -56,7 +56,7 @@ async function seed() {
   if (fs.existsSync(manifestPath) || collisions.some(Boolean)) throw Error('Run ID already exists; select a new ID');
   const smoke = process.env.BENCHMARK_PROFILE === 'smoke';
   const counts = smoke ? { admin: 1, manager: 1, staff: 2, guest: 6, batchesPerFacility: 2 }
-    : { admin: 5, manager: 20, staff: 180, guest: 1795, batchesPerFacility: 5 };
+    : { admin: 5, manager: 20, staff: 80, guest: 895, batchesPerFacility: 5 };
   const historyScale = Number(process.env.BENCHMARK_HISTORY_SCALE || 1);
   if (!Number.isFinite(historyScale) || historyScale <= 0 || historyScale > 1) throw Error('BENCHMARK_HISTORY_SCALE must be in (0,1]');
   const manifest = { version: 1, runId, database, counts, createdAt: new Date().toISOString(), image: path.resolve(process.env.BENCHMARK_IMAGE), imageMime: image.mime,

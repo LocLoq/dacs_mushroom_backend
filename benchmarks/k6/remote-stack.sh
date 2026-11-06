@@ -19,6 +19,10 @@ wait_ready() {
 case "$action" in
   prepare)
     test ! -e .env.benchmark
+    if command -v ss >/dev/null 2>&1 && [ -n "$(ss -H -ltn 'sport = :18080')" ]; then
+      echo 'Benchmark API port 18080 is already in use; stop the owning service before retrying.' >&2
+      exit 1
+    fi
     umask 077
     secret() { openssl rand -hex 24; }
     {

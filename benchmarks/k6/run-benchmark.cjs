@@ -42,7 +42,7 @@ const prometheus = (process.env.BENCHMARK_PROMETHEUS_URL || 'http://127.0.0.1:90
 const grafana = (process.env.BENCHMARK_GRAFANA_URL || 'http://127.0.0.1:3000').replace(/\/$/, '');
 if (!smoke && new URL(process.env.K6_PROMETHEUS_RW_SERVER_URL).origin !== new URL(prometheus).origin) throw Error('Prometheus query and remote-write URLs must have the same origin');
 const metadata = { schema_version: 2, started_at: new Date().toISOString(), base_url: base, mode, run_id: sessions.runId, measurement_id: measurementId,
-  profile: smoke ? 'smoke' : process.env.BENCHMARK_STEP_VUS ? 'steps-2000' : process.env.BENCHMARK_CALIBRATION_VUS === '100' ? 'calibration-100-vu' : 'full', roles: sessions.counts, source_ips: process.env.BENCHMARK_SOURCE_IPS || 'operating-system default',
+  profile: smoke ? 'smoke' : process.env.BENCHMARK_STEP_VUS ? 'steps-1000' : process.env.BENCHMARK_CALIBRATION_VUS === '100' ? 'calibration-100-vu' : 'full', roles: sessions.counts, source_ips: process.env.BENCHMARK_SOURCE_IPS || 'operating-system default',
   cache_case: cacheCase, distribution: process.env.BENCHMARK_DISTRIBUTION || 'uniform', step_vus: Number(process.env.BENCHMARK_STEP_VUS || 0), random_seed: Number(process.env.BENCHMARK_RANDOM_SEED || 1234567),
   source_ip_count_declared: sourceCount,
   rate_limits_declared: declaredRateLimits,

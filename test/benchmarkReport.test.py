@@ -9,6 +9,36 @@ ANALYZER = Path(__file__).resolve().parents[1] / 'benchmarks' / 'k6' / 'analyze-
 
 
 class BenchmarkReportTest(unittest.TestCase):
+    def test_1000_vu_profile_uses_its_own_hold_window(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            start = '2026-01-01T00:00:00Z'; end = '2026-01-01T00:10:00Z'; epoch = 1767225600
+            metadata = {'run_id': 'newrun', 'profile': 'full', 'mode': 'capacity', 'roles': {'guest': 895}, 'base_url': 'http://127.0.0.1', 'source_ips': 'local', 'rate_limits_declared': {}, 'runs': [{'id': 'measured', 'started_at': start, 'finished_at': end}]}
+            (root / 'metadata.json').write_text(json.dumps(metadata), encoding='utf-8')
+            (root / 'timeseries.json').write_text(json.dumps({'vus': {'result': [{'values': [[epoch + 240, '1000'], [epoch + 245, '1000']]}]}}), encoding='utf-8')
+            result = subprocess.run([sys.executable, str(ANALYZER), str(root)], capture_output=True, text=True)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            analysis = json.loads((root / 'analysis.json').read_text(encoding='utf-8'))
+            self.assertEqual(analysis['hold_seconds_at_1000_vus'], 10)
+            self.assertIsNone(analysis['hold_seconds_at_2000_vus'])
+
+    def test_isolation_outcomes_remain_distinct_and_legacy_is_unknown(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / 'metadata.json').write_text(json.dumps({'run_id': 'testrun', 'profile': 'smoke', 'mode': 'capacity', 'base_url': 'http://127.0.0.1', 'source_ips': 'local', 'rate_limits_declared': {}, 'roles': {}, 'runs': []}), encoding='utf-8')
+            metrics = {'isolation_checks': {'values': {'passes': 5, 'fails': 2, 'rate': 5 / 7}}}
+            for outcome, count in [('passed', 5), ('violation', 0), ('inconclusive', 2), ('mismatch', 0)]:
+                metrics[f'isolation_outcomes{{outcome:{outcome}}}'] = {'values': {'count': count}}
+            summary = root / 'measured.summary.json'
+            summary.write_text(json.dumps({'metrics': metrics}), encoding='utf-8')
+            subprocess.run([sys.executable, str(ANALYZER), str(root)], check=True, capture_output=True, text=True)
+            analysis = json.loads((root / 'analysis.json').read_text(encoding='utf-8'))
+            self.assertEqual(analysis['isolation_outcomes']['inconclusive'], 2)
+            self.assertEqual(analysis['isolation_outcomes']['violation'], 0)
+            summary.write_text(json.dumps({'metrics': {'isolation_checks': metrics['isolation_checks']}}), encoding='utf-8')
+            subprocess.run([sys.executable, str(ANALYZER), str(root)], check=True, capture_output=True, text=True)
+            self.assertIsNone(json.loads((root / 'analysis.json').read_text(encoding='utf-8'))['isolation_outcomes'])
+
     def test_pool_calibration_profile_produces_analysis(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

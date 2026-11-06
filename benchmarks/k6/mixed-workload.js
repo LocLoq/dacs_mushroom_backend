@@ -53,7 +53,7 @@ if (stepVus && ![5, 10, 25, 50, 100].includes(stepVus)) throw Error('Invalid ste
 const stages = smoke || warmup ? [{ duration: '5s', target: 10 }, { duration: '30s', target: 10 }, { duration: '5s', target: 0 }]
   : stepVus ? [{ duration: '10s', target: stepVus }, { duration: '2m', target: stepVus }, { duration: '10s', target: 0 }]
   : calibration ? [{ duration: '10s', target: 100 }, { duration: '3m', target: 100 }, { duration: '10s', target: 0 }]
-  : [{ duration: '1m', target: 200 }, { duration: '1m', target: 500 }, { duration: '1m', target: 1000 }, { duration: '1m', target: 2000 }, { duration: '5m', target: 2000 }, { duration: '1m', target: 0 }];
+  : [{ duration: '1m', target: 100 }, { duration: '1m', target: 250 }, { duration: '1m', target: 500 }, { duration: '1m', target: 1000 }, { duration: '5m', target: 1000 }, { duration: '1m', target: 0 }];
 export const options = {
   tags: { benchmark_run: __ENV.BENCHMARK_CASE_ID || meta[0].runId, test_phase: __ENV.BENCHMARK_PHASE || 'measured' },
   scenarios: layoutOnly ? { layout: { executor: 'per-vu-iterations', vus: 1, iterations: 1, maxDuration: '30s' } }
@@ -68,6 +68,7 @@ export const options = {
 // JSON sample per request. IDs and URLs never appear in metric tags.
 if (!warmup && !layoutOnly && !securityOnly) {
   if (!smoke) options.thresholds.isolation_checks = ['rate==1'];
+  for (const outcome of ['passed', 'violation', 'inconclusive', 'mismatch']) options.thresholds[`isolation_outcomes{outcome:${outcome}}`] = ['count>=0'];
   if (!preflight) {
     for (const outcome of ['hit', 'miss', 'bypass', 'error']) options.thresholds[`cache_responses{outcome:${outcome}}`] = ['count>=0'];
     for (let slot = 0; slot < meta[0].facilities.length; slot++) options.thresholds[`business_requests{facility_slot:${slot}}`] = ['count>=0'];
@@ -119,6 +120,12 @@ const modelTime = new Trend('classifier_model_ms');
 const preprocessTime = new Trend('classifier_preprocess_ms');
 const socketEvents = new Counter('socket_events');
 const isolationChecks = new Rate('isolation_checks');
+const isolationOutcomes = new Counter('isolation_outcomes');
+function recordIsolation(outcome, probe, role, status) {
+  isolationChecks.add(outcome === 'passed', { probe, role });
+  isolationOutcomes.add(1, { outcome, probe, role, status: String(status) });
+  if (outcome !== 'passed') console.warn(`Isolation probe: outcome=${outcome} probe=${probe} role=${role} status=${status}`);
+}
 const cacheResults = new Counter('cache_responses');
 const inputCoverage = new Counter('input_coverage');
 const pause = ms => new Promise(resolve => schedule(resolve, ms));
@@ -147,9 +154,9 @@ export function setup() {
   if (identities.size !== users.length || users.some(user => !identities.has(user.id))) throw Error('VU identities do not match sessions');
   if (!smoke) for (const facilityId of meta[0].facilities) {
     const group = layout.filter(slot => slot.facilityId === facilityId);
-    if (group.filter(slot => slot.role === 'manager').length !== 2 || group.filter(slot => slot.role === 'staff').length !== 18) throw Error('Facility identity distribution is invalid');
+    if (group.filter(slot => slot.role === 'manager').length !== 2 || group.filter(slot => slot.role === 'staff').length !== 8) throw Error('Facility identity distribution is invalid');
     const guests = group.filter(slot => slot.role === 'guest').length;
-    if (guests < 179 || guests > 180) throw Error('Guest facility distribution is invalid');
+    if (guests < 89 || guests > 90) throw Error('Guest facility distribution is invalid');
   }
 }
 
@@ -201,8 +208,9 @@ async function request(user, method, pathname, name, body, expected = 200, kind 
   if (ok && name === 'batches' && ['manager', 'staff'].includes(user.role)) {
     const rows = res.json('data');
     const isolated = Array.isArray(rows) && rows.every(row => Number(row.facilityId) === Number(user.facilityId));
-    isolationChecks.add(isolated, { probe: 'batch_list', role: user.role });
-    if (!isolated) execution.test.abort('Facility isolation failed for batch list');
+    const violation = Array.isArray(rows) && rows.some(row => Number.isSafeInteger(Number(row.facilityId)) && Number(row.facilityId) > 0 && Number(row.facilityId) !== Number(user.facilityId));
+    recordIsolation(isolated ? 'passed' : violation ? 'violation' : 'inconclusive', 'batch_list', user.role, res.status);
+    if (violation) execution.test.abort('Facility isolation failed for batch list');
   }
   if (!ok) failures.add(1, { ...tags, reason: res.status === 429 ? 'rate_limit' : [401, 403].includes(res.status) ? 'auth' : res.status >= 500 ? 'server' : res.status === 0 ? 'network' : 'response' });
   return res;
@@ -227,8 +235,9 @@ async function isolationProbe(user, all = false) {
       { headers: { Authorization: `Bearer ${user.token}` }, tags: { phase: 'security', role: user.role, endpoint: `cross_facility_${name}` }, timeout: '30s' });
     const safe = response.status === 403 || response.status === 404;
     check(response, { 'other facility data denied': () => safe }, { phase: 'security', role: user.role });
-    isolationChecks.add(safe, { probe: name, role: user.role });
-    if (!safe && response.status === 200) execution.test.abort(`Facility isolation failed: ${name}`);
+    const violation = response.status >= 200 && response.status < 300;
+    recordIsolation(safe ? 'passed' : violation ? 'violation' : 'inconclusive', name, user.role, response.status);
+    if (violation) execution.test.abort(`Facility isolation failed: ${name}`);
   }
   if (user.role === 'manager' && meta[0].verification) {
     const verification = meta[0].verification, expected = verification.facilities[String(user.facilityId)];
@@ -242,7 +251,8 @@ async function isolationProbe(user, all = false) {
       body.data.every(row => ids.includes(row.batchId)) && Number(body.summary?.revenue) === Number(expected.revenue) &&
       Number(body.summary?.totalCost) === Number(expected.totalCost) && Number(body.summary?.totalHarvestKg) === expected.totalHarvestKg;
     check(response, { 'facility report matches seed totals': () => safe }, { phase: 'security', role: user.role });
-    isolationChecks.add(safe, { probe: 'report_totals', role: user.role });
+    const foreignRow = Array.isArray(body?.data) && body.data.some(row => !ids.includes(row.batchId));
+    recordIsolation(safe ? 'passed' : foreignRow ? 'violation' : response.status === 200 && body ? 'mismatch' : 'inconclusive', 'report_totals', user.role, response.status);
     if (!safe && response.status === 200) execution.test.abort('Facility report differs from seed totals');
   }
 }
@@ -491,7 +501,7 @@ async function preflightWrites(user) {
       const revoked = await http.asyncRequest('GET', `${base}/api/cultivation-batches/${batchId}`, null,
         { headers: { Authorization: `Bearer ${revokedStaff.token}` }, tags: { phase: 'security', role: 'staff', endpoint: 'revoked_batch' }, timeout: '30s' });
       const denied = revoked.status === 403 || revoked.status === 404;
-      isolationChecks.add(denied, { role: 'staff', probe: 'revoked_batch' });
+      recordIsolation(denied ? 'passed' : revoked.status === 200 ? 'violation' : 'inconclusive', 'revoked_batch', 'staff', revoked.status);
       check(revoked, { 'revoked assignment denied': () => denied }, { phase: 'security', role: 'staff' });
       if (!denied) execution.test.abort('Revoked batch assignment remains accessible');
     }

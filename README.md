@@ -25,7 +25,7 @@ Swagger: **http://localhost:8080/api-docs**. Database mới chưa có tài kho�
 - [Chạy và vận hành Docker](RUN_DOCKER.md)
 - [Chạy trực tiếp trên Windows](RUN_BACKEND.md)
 - [Retry, giám sát classifier và rate limit](CLASSIFIER_RESILIENCE.md)
-- [Benchmark 2.000 VU trên 10 cơ sở](benchmarks/k6/README.md)
+- [Benchmark 1.000 VU trên 10 cơ sở](benchmarks/k6/README.md)
 - [API công việc, minh chứng, tài chính và gallery](NEW_API_DOCUMENTATION.md)
 - [Tích hợp Flutter](FLUTTER_API_INTEGRATION_GUIDE.md)
 - [Tham số thử API](API_TEST_PARAMS.md)

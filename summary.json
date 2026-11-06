@@ -1,13 +1,12 @@
 {
   "root_group": {
+    "name": "",
+    "path": "",
     "id": "d41d8cd98f00b204e9800998ecf8427e",
     "groups": [],
-    "checks": [],
-    "name": "",
-    "path": ""
+    "checks": []
   },
   "options": {
-    "noColor": true,
     "summaryTrendStats": [
       "avg",
       "med",
@@ -15,14 +14,23 @@
       "p(99)",
       "max"
     ],
-    "summaryTimeUnit": ""
+    "summaryTimeUnit": "",
+    "noColor": true
   },
   "state": {
     "isStdOutTTY": false,
     "isStdErrTTY": false,
-    "testRunDurationMs": 120.5308
+    "testRunDurationMs": 55.3911
   },
   "metrics": {
+    "data_sent": {
+      "type": "counter",
+      "contains": "data",
+      "values": {
+        "count": 0,
+        "rate": 0
+      }
+    },
     "data_received": {
       "type": "counter",
       "contains": "data",
@@ -32,30 +40,22 @@
       }
     },
     "iteration_duration": {
+      "type": "trend",
+      "contains": "time",
       "values": {
         "avg": 0,
         "med": 0,
         "p(95)": 0,
         "p(99)": 0,
         "max": 0
-      },
-      "type": "trend",
-      "contains": "time"
+      }
     },
     "iterations": {
       "type": "counter",
       "contains": "default",
       "values": {
         "count": 1,
-        "rate": 8.296634553159857
-      }
-    },
-    "data_sent": {
-      "type": "counter",
-      "contains": "data",
-      "values": {
-        "count": 0,
-        "rate": 0
+        "rate": 18.053441798411658
       }
     }
   }

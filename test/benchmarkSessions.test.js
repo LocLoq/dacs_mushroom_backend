@@ -4,7 +4,7 @@ const { validateRateLimits, validateSessions } = require('../benchmarks/k6/valid
 
 const now = Date.now();
 function fixture(smoke = false) {
-  const counts = smoke ? { admin: 1, manager: 1, staff: 2, guest: 6 } : { admin: 5, manager: 20, staff: 180, guest: 1795 };
+  const counts = smoke ? { admin: 1, manager: 1, staff: 2, guest: 6 } : { admin: 5, manager: 20, staff: 80, guest: 895 };
   const users = [];
   for (const role of ['admin', 'manager', 'staff']) for (let index = 0; index < counts[role]; index++) {
     const id = users.length + 1, username = `bench_${id}`;
@@ -14,7 +14,7 @@ function fixture(smoke = false) {
   const staff = users.filter(user => user.role === 'staff');
   const managers = users.filter(user => user.role === 'manager');
   if (!smoke) {
-    staff.forEach((user, index) => { user.facilityId = Math.floor(index / 18) + 1; });
+    staff.forEach((user, index) => { user.facilityId = Math.floor(index / 8) + 1; });
     managers.forEach((user, index) => { user.facilityId = Math.floor(index / 2) + 1; });
   }
   const pair = user => ({ staffId: user.id, facilityId: user.facilityId, batchId: user.batchId, batchCode: user.batchCode });
@@ -25,7 +25,7 @@ function fixture(smoke = false) {
 }
 
 test('benchmark validates both full and smoke identity populations', () => {
-  assert.equal(validateSessions(fixture(), 'http://127.0.0.1:8080', now).expected.guest, 1795);
+  assert.equal(validateSessions(fixture(), 'http://127.0.0.1:8080', now).expected.guest, 895);
   assert.equal(validateSessions(fixture(true), 'http://127.0.0.1:8080', now).smoke, true);
 });
 

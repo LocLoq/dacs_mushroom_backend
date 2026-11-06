@@ -6,15 +6,17 @@ Trên máy Windows, chạy tại thư mục backend:
 powershell -NoProfile -File benchmarks/k6/run-local.ps1
 ```
 
-Mặc định script kết nối `loql@192.168.1.200` bằng SSH key đã xác thực, tạo stack và database benchmark riêng, chạy smoke rồi chạy suite. Cần Docker Desktop, Node, SSH/SCP, tar, k6 và Python có Pillow/Matplotlib. `-Server`, `-SshUser`, `-Image`, `-K6`, `-Python` thay đường dẫn mặc định; `-Smoke` chỉ chạy smoke. `-Suite Small` chỉ chạy các mức 5–100 VU; `-Suite Main` chỉ chạy hai lượt 2.000 VU. Server cần cổng 18080 trống, Docker Compose và đủ chỗ lưu image, database và bản snapshot.
+Mặc định script kết nối `loql@192.168.1.200` bằng SSH key đã xác thực, tạo stack và database benchmark riêng, chạy smoke rồi chạy suite. Cần Docker Desktop, Node, SSH/SCP, tar, k6 và Python có Pillow/Matplotlib. `-Server`, `-SshUser`, `-Image`, `-K6`, `-Python` thay đường dẫn mặc định; `-Smoke` chỉ chạy smoke. `-Suite Small` chỉ chạy các mức 5–100 VU; `-Suite Main` chạy hai lượt 1.000 VU; `-Suite MainCold` hoặc `-Suite MainWarm` chỉ chạy lượt cache lạnh hoặc nóng. Server cần cổng 18080 trống, Docker Compose và đủ chỗ lưu image, database và bản snapshot.
 
-Suite có 10 cơ sở, 5 admin, 20 manager, 180 staff và 1.795 khách; seed 200 bản ghi nấm tổng hợp, 50 lô và lịch sử theo lô. Hai manager cùng cơ sở có cùng phạm vi quản lý staff. Kịch bản chọn tài nguyên trong từng cơ sở theo phân bố đều hoặc 80/20. Ảnh nhận diện được xác thực bằng Pillow và dùng chung fixture; kết quả không đo độ chính xác mô hình trên ảnh đa dạng.
+Suite có 10 cơ sở, 5 admin, 20 manager, 80 staff và 895 khách; mỗi cơ sở có 2 manager và 8 staff. Seed 200 bản ghi nấm tổng hợp, 50 lô và lịch sử theo lô. Hai manager cùng cơ sở có cùng phạm vi quản lý staff. Kịch bản chọn tài nguyên trong từng cơ sở theo phân bố đều hoặc 80/20. Ảnh nhận diện được xác thực bằng Pillow và dùng chung fixture; kết quả không đo độ chính xác mô hình trên ảnh đa dạng.
 
-Mỗi đối chứng nhỏ gồm tăng tải 10 giây, giữ 2 phút, giảm tải 10 giây và chờ job. Hai lượt chính đều dùng phân bố 80/20, với cache trống lúc bắt đầu hoặc đã làm nóng. Profile chính tăng đến 200, 500, 1.000 và 2.000 VU qua bốn chặng 1 phút, giữ 2.000 trong 5 phút, rồi giảm về 0 trong 1 phút. Thời gian chuẩn bị và chờ job tới 15 phút nằm ngoài 10 phút tải. Toàn bộ suite lâu hơn nhiều so với một lượt đo.
+Mỗi đối chứng nhỏ gồm tăng tải 10 giây, giữ 2 phút, giảm tải 10 giây và chờ job. Hai lượt chính đều dùng phân bố 80/20, với cache trống lúc bắt đầu hoặc đã làm nóng. Profile chính tăng đến 100, 250, 500 và 1.000 VU qua bốn chặng 1 phút, giữ 1.000 trong 5 phút, rồi giảm về 0 trong 1 phút. Thời gian chuẩn bị và chờ job tới 15 phút nằm ngoài 10 phút tải. Toàn bộ suite lâu hơn nhiều so với một lượt đo.
 
 Trước từng biến thể, script khôi phục snapshot database benchmark, làm sạch Redis hàng đợi của **riêng project benchmark**, xác thực lại và dùng cùng cấu hình API pool 10, worker pool 4, classifier concurrency 2, PyTorch 1 thread. Không chạy suite trên database ứng dụng hoặc Redis dùng chung. Thao tác ghi benchmark có thể tạo thêm dữ liệu trong lượt đo; dữ liệu ban đầu được khôi phục giữa các lượt.
 
 Preflight kiểm tra các endpoint và sau warmup runner đổi namespace cache. Lượt warm nạp dữ liệu bằng API thật và kiểm tra cache hit. Lượt cold bắt đầu với cache trống: cache được lấp dần trong thời gian tăng tải, do đó không coi toàn bộ lượt đo là cold. Kiểm tra truy cập chéo có chủ đích được ghi riêng khỏi lỗi nghiệp vụ; lỗi cách ly dừng suite. Nhận diện là dịch vụ dùng chung và không được gán cơ sở.
+
+Nếu probe cách ly bị timeout hoặc lỗi mạng trong lúc đo, suite tiếp tục nhưng readiness vẫn ghi chưa đủ bằng chứng. Vi phạm đã xác nhận, sai tổng đối chứng và lỗi chưa phân loại vẫn dừng suite; preflight và kiểm tra an toàn trước đo vẫn phải đạt.
 
 Smoke có một cơ sở thuộc manager và một cơ sở khác để kiểm tra từ chối truy cập. Manifest lưu cửa sổ lịch sử và tổng tài chính đối chứng theo cơ sở; kiểm tra báo cáo dùng cửa sổ này để tránh ảnh hưởng từ các thao tác ghi trong lúc chạy.
 
